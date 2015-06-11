@@ -5,7 +5,7 @@
 - `nikic/php-parser` is used to parse PHP source into an AST.
 - `phpdocumentor/reflection-docblock` is used to extract the `@return`, `@param` and `@var` tags from doc comments.
 - `JetBrains/phpstorm-stubs` is used to provide types of PHP bulitins.
-- All function and method inputs/outputs and class properties are typed statically in the source, to server as inputs to type checking. Only local variable types need to be inferred.
+- All function and method inputs/outputs and class properties are typed statically in the source, to serve as inputs to type checking. Only local variable types need to be inferred.
   - All function/method parameters must be given a type with the `@param` doc comment.
   - All function/method return types must be given a type with the `@return` doc comment.
   - All class properties must be given a type with the `@var` doc comment.
