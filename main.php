@@ -21,7 +21,7 @@ $parsed = $parser->parse($code);
 
 $defs = new Definitions;
 $defs->import($parsed);
-$defs->verify($parsed, new ErrorReceiver('test'));
+$defs->verify($parsed, new ErrorReceiver('test.php'));
 
 class ErrorReceiver {
     private $file;
