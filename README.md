@@ -98,3 +98,123 @@ properties in this scheme may not be necessary.
 
 Arrays are also maps from strings (keys) to slots. However, unlike objects, a slot containing an array contains the array
 itself, not a pointer to it. As such, arrays are always passed by value.
+
+# Types
+
+- `Ref[...]` A reference which can only contain the specified type. In terms
+  of the PHP memory model, this means the VSlot points to a VStore that may
+  be pointed to by (shared with) other VSlots.
+- `undefined` The type of undefined variables, properties, and the result of
+  `void` functions. In terms of the PHP memory model, this means that the
+  VSlot for this name doesn't actually exist.
+- `mixed`
+    - `int`
+        - `constint[9]` An int whose value is known.
+    - `string`
+        - `conststring[hello]` A string whose value is known.
+    - `float`
+        - `constfloat[0.1]` A float whose value is known.
+    - `true`
+    - `false`
+    - `resource`
+    - `null`
+    - `object`
+        - `<Class>`
+        - `this` The same as `self` except will be the whatever the concrete
+          class the method was called on.
+        - `static` The same as `self` except will be the 
+    - `Closure[..., ...]:...`
+    - `(...)[]`
+
+## Composed types
+
+- `...|...|...` Can be any of the listed types.
+
+  Allowed operations are those that are allowed on _all_ of the listed types.
+- `...&...&...` Must be all of the listed types, simultaneously.
+
+  Allowed operations are those that are allowed on _any_ of the listed types.
+
+  Typically only satisfiable if the types are classes/interfaces and an object
+  is an `instanceof` all of them.
+
+## Aliases
+
+- `bool` => `true|false`
+- `boolean` => `bool`
+- `integer` => `int`
+- `double` => `float`
+- `self` => (current class)
+- `parent` => (parent class)
+- `array => `(mixed)[]`
+- `$this` => `this`
+- `void` => `undefined`
+
+# Syntax
+
+The three types of l-values in PHP are:
+
+```php
+$var   # named variable
+${...} # dynamic variable
+
+...->prop   # named property
+...->${...} # dynamic property
+
+...['foo'] # named key
+...[...]   # dynamic key
+```
+
+l-values can be used anywhere an expression can be used.
+All l-values can be assigned to (used on the left of `=`) and used as a
+reference (used on the right of `=&`).
+
+Besides l-values, one other expression can be used as a reference: a call to a
+function 
+
+# Operations
+
+## References
+
+The `deref` operation is defined by:
+```
+deref Ref[x] = x
+deref undefined = error
+deref x = x
+```
+
+The `toref` operation is defined by:
+```
+toref Ref[x] = Ref[x]
+toref undefined = Ref[null]
+toref x = Ref[x]
+```
+
+- `$a = expr` 
+    - If `$a` is a local variable.
+        - If `$a` is a reference, checks that the expression satisfies the
+          reference type.
+        - Otherwise variable `$a` is set to be `deref(expr)`
+    - If `$a` is an object property, `deref(expr)` must be a contained in the
+      type of the property, and the type of the property is unchanged.
+    - If `$a` is an array entry, `deref(expr)` is added to the list of types
+      inside the array.
+- `$a =& $b` Variables `$a` and `$b` are set to be `toref($b)`. For both `$a`
+  and `$b`:
+    - If it is an object property, the type inside the new `Ref[...]` type
+      must be _equal_ to the type of the property, and the type of the
+      property is left unchanged.
+    - If it is an array entry, the new `Ref[...]` type is _added_ to the list
+      of possible types inside the array.
+- `isset($a)` case `deref(toref($a))`
+    - `null` => `false`
+    - `...` => `true`
+- `unset($a)` `$a` is set to undefined, the effect being:
+    - If `$a` is a local variable, it is removed.
+    - If `$a` is an array entry, nothing is done, since `undefined` is always
+      a possible value of array values.
+    - If `$a` is an object property, `undefined` must be a possible type for
+      the property.
+- `global $foo` Sets `$foo` to be `Ref[...]` using the derefed type of the
+  `$foo` global variable.
+
