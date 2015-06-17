@@ -165,12 +165,21 @@ ${...} # dynamic variable
 ...[...]   # dynamic key
 ```
 
-l-values can be used anywhere an expression can be used.
-All l-values can be assigned to (used on the left of `=`) and used as a
-reference (used on the right of `=&`).
+l-values can be both written to (used on the left of `=`) and read from (used as an expression, eg on the right of `=`).
 
-Besides l-values, one other expression can be used as a reference: a call to a
-function 
+l-values can also be used as a source and destination for references, that is, can be bound as a reference to another l-value, and another l-value can be bound to it.
+
+Functions can also be used as a source and destination for references.
+
+If a function paramter is taken by reference, an l-value must be passed, not just any expression, and it behaves as though the l-value appeared on the right-hand side of the `=&` operator.
+
+If a function returns a reference, then a call to that function may appear on the right hand side of the `=&` operator.
+
+Array literals can include references also, as in `['foo' => &$bar]`, which has the same effect on `$bar` as though `$bar` hed appeared on the right hand side of `=&`.
+
+For loops using references, eg `for ($a as &$b) {...}` have the same effect on both `$a` and `$b` as `$b =& $a[...]` (where `...` is unknown).
+
+A reference in a Closure's `use` list, eg `function () use (&$b) {...}` has the same effect on `$b` as appearing on the right hand side of `=&`. `$b` is set to a reference inside the body of the function.
 
 # Operations
 
