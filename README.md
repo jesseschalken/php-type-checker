@@ -146,7 +146,7 @@ itself, not a pointer to it. As such, arrays are always passed by value.
 - `double` => `float`
 - `self` => (current class)
 - `parent` => (parent class)
-- `array => `(mixed)[]`
+- `array` => `mixed[]`
 - `$this` => `this`
 - `void` => `undefined`
 
