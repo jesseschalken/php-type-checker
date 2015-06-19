@@ -101,12 +101,8 @@ itself, not a pointer to it. As such, arrays are always passed by value.
 
 # Types
 
-- `Ref[...]` A reference which can only contain the specified type. In terms
-  of the PHP memory model, this means the VSlot points to a VStore that may
-  be pointed to by (shared with) other VSlots.
-- `undefined` The type of undefined variables, properties, and the result of
-  `void` functions. In terms of the PHP memory model, this means that the
-  VSlot for this name doesn't actually exist.
+- `ref` A reference. In terms of the PHP memory model, this means the VSlot points to a VStore that may be pointed to by (shared with) other VSlots.
+- `undefined` The type of undefined variables, properties, and the result of `void` functions. In terms of the PHP memory model, this means that the VSlot for this name doesn't actually exist.
 - `mixed`
     - `int`
         - `constint[9]` An int whose value is known.
