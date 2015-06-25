@@ -15,11 +15,11 @@ Possible variable states:
     - `null`
     - `object` Any object.
         - `<class>` An instance of a specified class.
-        - `function(X, Y...):W` A closure which accepts the given parameters and
-          return value. The parameters/return value can be any variable state,
-          including `ref` to indicate a parameter is taken by reference or a
-          value is returned by reference. `undefined` for the return value
-          indicates a `void` function.
+        - `function(X, Y...):W` An object whose `__invoke` method has the
+          given signature (eg. a `Closure`). The parameters/return value can
+          be any variable state, including `ref` to indicate a parameter is
+          taken by reference or a value is returned by reference. `undefined`
+          for the return value indicates a `void` function.
     - `resource`
     - `T[]` An array of type T. T is any variable state, including `ref`.
       Including `undefined` in T is redundany, since an array can't possibly
@@ -59,10 +59,12 @@ Possible program `runstate` values:
 - `next` The program is ready to execute the next statement/instruction. This
   is normal operation. Any program state with a `runstate` other than `next`
   is ignored while stepping through the program.
-- `throw` The program has thrown an exception, waiting to be handled by the
-  next `catch` block.
+- `throw[T]` The program has thrown an exception of type `T`, waiting to be
+  handled by the next `catch` block. `T` can be multiple types.
 - `exit` The program has exited abnormally, eg via `exit;`.
-- `return` The program has returned.
+- `return[T]` The program has returned a value of type `T`. `T` can be
+  multiple types. `T` can be `ref` to indicate returning by reference, or
+  `undefined` to indicate that no value is returned (ie `void`).
 - `break N` The program has requested to break N loops.
 - `continue N` The program has requested to continue N loops.
 - `goto L` The program has requested to goto the specified label. _GOTOs are
@@ -111,6 +113,28 @@ block:
   it was the `else` block.
 - `... && ...` The program state is filtered through the expression on the
   left and then the expression on the right.
+- `isset($foo)` `$foo` is filtered to exclude `undefined` and `null`.
+- `empty($foo)` `$foo` is filtered to exclude types which are always truthy.
+- `!empty($foo)` `$foo` is filtered to exclude types which are always falsy,
+  and `undefined`.
+
+Note:
+
+    The following types are always truthy:
+    - `object`
+    - `true`
+    - `resource`
+
+    The following types are always falsy:
+    - `null`
+    - `false`
+
+    The following types are neither always truthy nor always falsy:
+    - `ref` (since it evaluates as `mixed`)
+    - `int`
+    - `string`
+    - `float`
+    - `T[]`
 
 For the `else` branch, the same is done except the applicable type is
 _removed_ from the list, if present (since we definitely know that that's not
@@ -141,11 +165,11 @@ A `while` loop is handled the exact same way as an `if` block with an empty
 case of the expression, if the resulting program state is not _included_ in (ie
 it is not a subset of) the program state when the loop was first entered, then
 it is _added_ to the initial program state and the loop is run again, and the
-process repeats. The static analysis of a real while loop dealing with values
-is implemented as a while loop dealing in types. ;)
+process repeats. The static analysis of a real while loop dealing in values is
+implemented as a while loop dealing in types. ;)
 
-In terms of data flow analysis, this amounts to calculating the `fixed-point`
-of the control flow, and is intended to handle situations such as these:
+In terms of data flow analysis, this amounts to calculating the "fixed-point"
+of the data flow, and is intended to handle situations such as these:
 
 ```php
 $a = 1;
@@ -218,9 +242,9 @@ A `foreach` is handled the same as a `while` loop, however there is no
 `expr` is evaluated once before the loop starts. There are three posible cases
 for `expr`:
 
-- If `expr` evaluates to an `array`, `$k` is set to `int|string` and `$v` is
-  set to the type wrapped by the array, eg if expr was `(Foo|null)[]`, `$v`
-  becomes `Foo|null`.
+- If `expr` evaluates to an `array`, `$k` is assigned to `int|string` and `$v`
+  is assigned set to the type wrapped by the array, ie the same as `$k =
+  int|string; $v = expr[...];`.
 - If `expr` evaluates to an object that implements the `Iterator` or
   `IteratorAggregate` interface, then `$k` is set to the return type of
   `Iterator::key()` and `$v` is set to the return type of
@@ -266,6 +290,11 @@ possible return values, and sets the program `runstate` to `return`.
 
 _GOTOs are ignored._
 
+# throw
+
+A `throw EXPR;` statement replaces the program state with `throw(T)` where `T`
+is the type of `EXPR`.
+
 # try-catch-finally
 
 ```
@@ -287,9 +316,8 @@ exceptions, then it is removed, and the program splits, sets `runstate = next`
 and sets the catch variable to be an instance of the exception class.
 
 With all possible program states resulting from the `try` and `catch` blocks,
-the `finally` block is executed.
-
-For each program state, the `runstate` is captured and reset to `next`. The
+except those in state `exit`, the `finally` block is executed. To do so, for
+each program state, the `runstate` is captured and reset to `next`. The
 program state is sent through the `finally` block. (It may split into multiple
 program states due to `ifs` inside the `finally`, etc) For each resulting
 program state, if the `runstate` is still `next`, then it is set to whatever
@@ -307,7 +335,7 @@ try {
 
     // 2 program states:
     // - runstate: next, $a = string
-    // - runstate: throw, exceptions: BarException
+    // - runstate: throw[BarException]
 }
 
 catch (FooException $e) {
@@ -315,15 +343,15 @@ catch (FooException $e) {
 }
 
 catch (BarException $e) {
-    // the program state "runstate: throw, exceptions: BarException" enters
-    // here
+    // the program state "runstate: throw[BarException]" matches
+    // the catch block, and enters here
     return 'foo';
-    // program state becomes "runstate: return, return: string"
+    // program state becomes "runstate: return[string]"
 }
 
 // 2 program states:
 // - runstate: next, $a = string
-// - runstate: return, return: string
+// - runstate: return[string]
 
 finally {
     // 2 program states:
@@ -339,6 +367,6 @@ finally {
 
 // 2 program states:
 // - runstate: break, $a = string
-// - runstate: return, return: string
+// - runstate: return[string]
 ```
 
