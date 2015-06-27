@@ -31,18 +31,13 @@ Possible variable states:
 
 A program state contains:
 
-1. An array of possible return values, starting as `undefined`. If `undefined`
-   is present amongst other return values, this means the function sometimes
-   returns a value and sometimes doesn't.
-4. An array of possibly thrown exceptions. These are only strings, no
-   `undefined`. Only meaningful if the `runstate` is `throw`.
-2. A class name for `$this`, if any. (Initialised once and unchanged.)
-3. A map from variable names to an array of variable states. When acting on a
+1. A map from variable names to an array of variable states. When acting on a
    variable, all of its possible states must be considered.
-5. A `runstate`, indicating whether the program has broken/continued a loop,
+2. A class name for `$this`, if any. (Initialised once and unchanged.)
+3. A `runstate`, indicating whether the program has broken/continued a loop,
    thrown an exception, returned, or is simply waiting for the next statement,
    etc.
-6. A boolean indicating whether to return by-reference. (Initialised once and
+4. A boolean indicating whether to return by-reference. (Initialised once and
    unchanged.)
 
 Since a single program state contains multiple possible variable states for
