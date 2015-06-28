@@ -7,14 +7,18 @@ class ProgramState {
     private $vars = [];
     /** @var Variable */
     private $return;
+    /** @var Variable */
+    private $default;
 
-    function __construct() {
-        $this->return = new Variable;
+    function __construct($empty) {
+        $this->default = new Variable($empty);
+        $this->return  = clone $this->default;
     }
 
     function __clone() {
-        $this->vars   = clone_array($this->vars);
-        $this->return = clone $this->return;
+        $this->vars    = clone_any($this->vars);
+        $this->return  = clone $this->return;
+        $this->default = clone $this->default;
     }
 
     /**
@@ -23,8 +27,15 @@ class ProgramState {
      */
     function variable($name) {
         if (!array_key_exists($name, $this->vars))
-            $this->vars[$name] = new Variable;
+            $this->vars[$name] = clone $this->default;
         return $this->vars[$name];
+    }
+
+    /**
+     * @param Type[] $types
+     */
+    function setReturn(array $types) {
+        $this->return->set($types);
     }
 
     function unparse() {
@@ -38,6 +49,7 @@ class ProgramState {
 
     function import(self $that) {
         $this->return->import($that->return);
+        $this->default->import($that->default);
 
         foreach ($that->vars as $name => $var) {
             $this->variable($name)->import($var);
@@ -46,11 +58,11 @@ class ProgramState {
 }
 
 class ProgramStates {
-    /** @var ProgramState|null */
+    /** @var ProgramState */
     private $next;
     /** @var ProgramState[] */
     private $throw = [];
-    /** @var ProgramState|null */
+    /** @var ProgramState */
     private $return;
     /** @var ProgramState[] */
     private $break = [];
@@ -58,7 +70,26 @@ class ProgramStates {
     private $continue = [];
 
     function __construct() {
-        $this->next = new ProgramState;
+        $this->next   = new ProgramState(false);
+        $this->return = new ProgramState(true);
+    }
+
+    function throw_($exception) {
+        if (!array_key_exists($exception, $this->throw))
+            $this->throw[$exception] = new ProgramState(true);
+        return $this->throw[$exception];
+    }
+
+    function break_($level) {
+        if (!array_key_exists($level, $this->break))
+            $this->break[$level] = new ProgramState(true);
+        return $this->break[$level];
+    }
+
+    function continue_($level) {
+        if (!array_key_exists($level, $this->continue))
+            $this->continue[$level] = new ProgramState(true);
+        return $this->continue[$level];
     }
 
     /**
@@ -82,39 +113,39 @@ class ProgramStates {
         } else if ($expr instanceof \PhpParser\Node\Scalar\DNumber) {
             return [new Float];
         } else {
-            throw new \Exception('unhandled expr: ' . get_class($expr));
+            throw new \Exception('unhandled expr: ' . typeof($expr));
         }
     }
 
     /**
      * @param \PhpParser\Node\Expr           $cond
-     * @param \PhpParser\Node[]              $stmts
+     * @param \PhpParser\Node[]              $ifStmts
      * @param \PhpParser\Node\Stmt\ElseIf_[] $elseIfs
-     * @param \PhpParser\Node[]              $else
+     * @param \PhpParser\Node[]              $elseStmts
      * @throws \Exception
      */
-    function executeIf($cond, array $stmts, array $elseIfs, array $else) {
-        $false = clone $this;
+    function executeIf($cond, array $ifStmts, array $elseIfs, array $elseStmts) {
+        $else = clone $this;
 
         $this->evaluate($cond, true);
-        $false->evaluate($cond, false);
+        $else->evaluate($cond, false);
 
-        $this->executeAll($stmts);
+        $this->executeAll($ifStmts);
 
         if ($elseIfs) {
             /** @var \PhpParser\Node\Stmt\ElseIf_ $elseIf */
             $elseIf = array_shift($elseIfs);
-            $false->executeIf(
+            $else->executeIf(
                 $elseIf->cond,
                 $elseIf->stmts,
                 $elseIfs,
-                $else
+                $elseStmts
             );
         } else {
-            $false->executeAll($else);
+            $else->executeAll($elseStmts);
         }
 
-        $this->import($false);
+        $this->import($else);
     }
 
     /**
@@ -131,8 +162,14 @@ class ProgramStates {
                 $stmt->elseifs,
                 $stmt->else ? $stmt->else->stmts : []
             );
+        } else if ($stmt instanceof \PhpParser\Node\Stmt\Return_) {
+            $expr = $stmt->expr;
+            if ($expr)
+                $this->next->setReturn($this->evaluate($expr, null));
+            $this->return->import($this->next);
+            $this->next = new ProgramState(true);
         } else {
-            throw new \Exception('unhandled stmt: ' . get_class($stmt));
+            throw new \Exception('unhandled stmt: ' . typeof($stmt));
         }
     }
 
@@ -150,59 +187,33 @@ class ProgramStates {
     }
 
     function unparse() {
-        if ($this->next)
-            return $this->next->unparse();
-        else
-            return 'nope';
+        $state = clone $this->next;
+        $state->import($this->return);
+        return $state->unparse();
     }
 
     function __clone() {
-        if ($this->return)
-            $this->return = clone $this->return;
-        if ($this->next)
-            $this->next = clone $this->next;
-        $this->throw    = clone_array($this->throw);
-        $this->break    = clone_array($this->break);
-        $this->continue = clone_array($this->continue);
+        $this->return   = clone $this->return;
+        $this->next     = clone $this->next;
+        $this->throw    = clone_any($this->throw);
+        $this->break    = clone_any($this->break);
+        $this->continue = clone_any($this->continue);
     }
 
     function import(self $that) {
-        if ($that->next) {
-            if ($this->next)
-                $this->next->import($that->next);
-            else
-                $this->next = $that->next;
-        }
-
-        if ($that->return) {
-            if ($this->return)
-                $this->return->import($that->return);
-            else
-                $this->return = $that->return;
-        }
+        $this->next->import($that->next);
+        $this->return->import($that->return);
 
         foreach ($that->throw as $exception => $state) {
-            if (array_key_exists($exception, $this->throw)) {
-                $this->throw[$exception]->import($state);
-            } else {
-                $this->throw[$exception] = $state;
-            }
+            $this->throw_($exception)->import($state);
         }
 
         foreach ($that->break as $level => $state) {
-            if (array_key_exists($level, $this->break)) {
-                $this->break[$level]->import($state);
-            } else {
-                $this->break[$level] = $state;
-            }
+            $this->break_($level)->import($state);
         }
 
         foreach ($that->continue as $level => $state) {
-            if (array_key_exists($level, $this->continue)) {
-                $this->continue[$level]->import($state);
-            } else {
-                $this->continue[$level] = $state;
-            }
+            $this->continue_($level)->import($state);
         }
     }
 }

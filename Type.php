@@ -132,7 +132,7 @@ class Callable_ extends Object {
 
     function __clone() {
         $this->return = clone $this->return;
-        $this->params = clone_array($this->params);
+        $this->params = clone_any($this->params);
     }
 
     function unparse() {
@@ -154,7 +154,7 @@ class Array_ extends Type {
     private $value;
 
     function __construct() {
-        $this->value = new Variable;
+        $this->value = new Variable(false);
     }
 
     function eq(VarState $that) {
@@ -174,12 +174,16 @@ class Variable {
     /** @var VarState[] */
     private $states = [];
 
-    function __construct() {
-        $this->states = [new Undefined];
+    /**
+     * @param bool $empty
+     */
+    function __construct($empty) {
+        if (!$empty)
+            $this->states[] = new Undefined;
     }
 
     function __clone() {
-        $this->states = clone_array($this->states);
+        $this->states = clone_any($this->states);
     }
 
     function eq(self $that) {
@@ -219,6 +223,7 @@ class Variable {
         $p = [];
         foreach ($this->states as $s)
             $p[] = $s->unparse();
+        sort($p, SORT_STRING);
         return join('|', $p);
     }
 

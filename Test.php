@@ -23,15 +23,17 @@ s
 <?php
 if (5)
     $a = 'b';
-else if (7)
+elseif (7)
     $a = 8.6;
-else
+elseif (2)
     $a = 7;
+else
+    return 'an hero';
 s
         );
         self::assertEquals(<<<'s'
-$a = string|float|int
-return void
+$a = float|int|string
+return string|void
 s
             , $state->unparse() );
     }
