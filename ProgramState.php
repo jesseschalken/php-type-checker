@@ -51,8 +51,10 @@ class ProgramState {
         $this->return->import($that->return);
         $this->default->import($that->default);
 
-        foreach ($that->vars as $name => $var) {
-            $this->variable($name)->import($var);
+        $vars = array_keys(array_replace($this->vars, $that->vars));
+
+        foreach ($vars as $name) {
+            $this->variable($name)->import($that->variable($name));
         }
     }
 }
@@ -204,16 +206,20 @@ class ProgramStates {
         $this->next->import($that->next);
         $this->return->import($that->return);
 
-        foreach ($that->throw as $exception => $state) {
-            $this->throw_($exception)->import($state);
+        $throws    = array_keys(array_replace($this->throw, $that->throw));
+        $breaks    = array_keys(array_replace($this->break, $that->break));
+        $continues = array_keys(array_replace($this->continue, $that->continue));
+
+        foreach ($throws as $exception) {
+            $this->throw_($exception)->import($that->throw_($exception));
         }
 
-        foreach ($that->break as $level => $state) {
-            $this->break_($level)->import($state);
+        foreach ($breaks as $level) {
+            $this->break_($level)->import($that->break_($level));
         }
 
-        foreach ($that->continue as $level => $state) {
-            $this->continue_($level)->import($state);
+        foreach ($continues as $level) {
+            $this->continue_($level)->import($that->break_($level));
         }
     }
 }
