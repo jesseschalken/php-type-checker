@@ -1,225 +1,367 @@
 
+Possible variable states:
 
-## the plan
-
-- `nikic/php-parser` is used to parse PHP source into an AST.
-- `phpdocumentor/reflection-docblock` is used to extract the `@return`, `@param` and `@var` tags from doc comments.
-- `JetBrains/phpstorm-stubs` is used to provide types of PHP bulitins.
-- All function and method inputs/outputs and class properties are typed statically in the source, to serve as inputs to type checking. Only local variable types need to be inferred.
-  - All function/method parameters must be given a type with the `@param` doc comment.
-  - All function/method return types must be given a type with the `@return` doc comment.
-  - All class properties must be given a type with the `@var` doc comment.
-- Local variable types are inferred by stepping through the function/method body and collecting types assigned to each variable.
-- Only types supported by PHPDoc are supported ([link](http://www.phpdoc.org/docs/latest/references/phpdoc/types.html)). Notably, this includes arrays of types, eg `Foo[]`, and "or"/disjunction types, eg `Foo|int|string`, but not real generics like `Foo<int>`.
-- For disjunction types like `Foo|int|string`, the operations used must be valid for _all_ types in the disjunction, not any. (i.e. prove that the code works always, not that it might work sometimes.)
-- Expressions like `$blah instanceof Foo`, `is_string($blah)` or `$blah === null`, when used in a conditional such as `if`, will constrain the types of variables inside the block.
-- Since `null` is a distinct type, and `$foo !== null` would infer that `$foo` cannot be `null`, the type checking is effectively null-safe, with `Foo|null` denoting a nullable `Foo`.
-- All types for a function parameter must satisfy any type hint on the parameter. So, for example, `/** @param Foo|string $foo */ function f(Foo $foo)` would result in `type 'string' does not match 'Foo'`.
-- All `return ...;` statements in a function must satisfy the constraints of the `@return` tag for that function.
-- Three operations would be required on an arbitrary expression:
-  - `verify()` type-check the expression. Eg `verify("$foo->bar()")` with `$foo = 8` would emit `"cannot call method 'bar' on int"`.
-  - `typeof()` infer a type for the expression. Eg `typeof("strlen('foo')")` is `int`.
-  - `execute()` infer any types that would be assigned to local variables from evaluating the expression. Eg `execute("$f = true || 8")` returns the type assignment `$f = bool`.
-  - `implies()` infer any types that would be assigned to local variables if the expression were to evaluate to something _truthy_. Eg `implies("$f instanceof Foo && is_string($b)")` returns `$f = Foo, $b = string`.
-- `int|string` is they type for an array key.
-- `int|float` is the type for most numerical operations.
-
-
-## The PHP memory model
-
-PHP's memory model is split in three parts.
-
-1. Variables
-2. Slots
-3. Objects
-
-A variable points to a slot. A slot contains a value. A value may point to an object.
-
-### References
-
-Assignment (`$a = ...`) changes the value _in_ the slot pointed to _by_ the variable.
-_Reference_ assignment (`$a =& ...`) changes the _variable_ to point to a _different_ slot.
-
-Note that we cannot simply forget about slots and consider `$b =& $a` as causing `$b` to redirect all reads/writes to `$a`:
-
-```php
-$a = 9; // The slot that $a points to contains 9
-$b =& $a; // $b points to the same slot as $a
-unset($a); // $a is disconnected from the slot
-$a = 'foo'; // $a points to a new slot containing 'foo'
-print $b; // $b is still 9, even though $a is 'foo'
-```
-
-Note also that static analysis for PHP programs necessarily needs to understand references. For example, to see that this function will return the integer `5` and not the string `'string'`:
-
-```php
-/**
- * @return string
- */
-function f() {
-  $a = 'string';
-  $b =& $a;
-  $b = 5;
-  return $a;
-}
-```
-
-### Objects
-
-In the same way variables point to slots, and different variables can point to the same slot, slots themselves can point to objects, and
-different slots can point to the same object.
-
-```php
-class Foo {
-  public $x = 9;
-}
-
-$a = new Foo; // The slot that $a points to contains a pointer to an object of type Foo
-print $a->x; // 9
-$b = $a; // $b points to another slot that contains the same object as the slot pointed to by $a
-$a->x = 10; // The 'x' property of the object pointed to by the slot pointed to by $a is now 10
-print $b->x; // Prints 10, since the slot pointed to by $b contains a pointer to the same object
-```
-
-An object itself is a map from property names to values, in the same way that the set of local variables is a map from variable names
-to values. However, since an object belongs to a class which in turn has parent classes, and each class can
-have its own private properties even with the same name, a scheme is used to seperate public, private and protected properties.
-
-```php
-"\x00$class\x00$property" // Private property for $class
-"\x00*\x00$property"      // Protected property
-"$property"               // Public property
-```
-
-This of course assumes that property names don't contain null bytes (`\x00`). The distinction between protected and public
-properties in this scheme may not be necessary.
-
-### Arrays
-
-Arrays are also maps from strings (keys) to slots. However, unlike objects, a slot containing an array contains the array
-itself, not a pointer to it. As such, arrays are always passed by value.
-
-# Types
-
-- `ref` A reference. In terms of the PHP memory model, this means the VSlot points to a VStore that may be pointed to by (shared with) other VSlots.
-- `undefined` The type of undefined variables, properties, and the result of `void` functions. In terms of the PHP memory model, this means that the VSlot for this name doesn't actually exist.
-- `mixed`
+- `ref` The variable is bound as a reference to another variable. In terms of
+  the PHP memory model, this means the VSlot points to a VStore possibly
+  shared with other VSlots. When reading a variable in the `ref` state, the
+  result is `mixed`. Any value can be written to a variable in state `ref`.
+- `undefined` The variable is not defined.
+- `value`
     - `int`
-        - `constint[9]` An int whose value is known.
     - `string`
-        - `conststring[hello]` A string whose value is known.
     - `float`
-        - `constfloat[0.1]` A float whose value is known.
     - `true`
     - `false`
-    - `resource`
     - `null`
+    - `object` Any object.
+        - `<class>` An instance of a specified class.
+        - `function(X, Y...):W` An object whose `__invoke` method has the
+          given signature (eg. a `Closure`). The parameters/return value can
+          be any variable state, including `ref` to indicate a parameter is
+          taken by reference or a value is returned by reference. `undefined`
+          for the return value indicates a `void` function.
+    - `resource`
+    - `T[]` An array of type T. T is any variable state, including `ref`.
+      Including `undefined` in T is redundany, since an array can't possibly
+      cover all possible keys and therefore some must be `undefined`. `array`
+      is an alias for `mixed[]`, which notably excludes `ref`. You cannot pass
+      an array containing references into `array` (`mixed[]`) since an array
+      containing references is a different beast to an array containing mixed
+      values. 
+
+A program state contains:
+
+1. A map from variable names to an array of variable states. When acting on a
+   variable, all of its possible states must be considered.
+2. A class name for `$this`, if any. (Initialised once and unchanged.)
+3. A `runstate`, indicating whether the program has broken/continued a loop,
+   thrown an exception, returned, or is simply waiting for the next statement,
+   etc.
+4. A boolean indicating whether to return by-reference. (Initialised once and
+   unchanged.)
+
+Since a single program state contains multiple possible variable states for
+each variable, and multiple possible return values, and multiple possibly
+thrown exceptions, a single program state in fact represents multiple _real_
+program states (in the sense of the PHP runtime). The only thing a program
+state contains only _one of_ is the `runstate`, and therefore multiple
+programstates with the same `runstate` can be merged together (merging
+together the state of all variables, the value of return values and the
+possibly thrown exceptions).
+
+Possible program `runstate` values:
+
+- `next` The program is ready to execute the next statement/instruction. This
+  is normal operation. Any program state with a `runstate` other than `next`
+  is ignored while stepping through the program.
+- `throw[T]` The program has thrown an exception of type `T`, waiting to be
+  handled by the next `catch` block. `T` can be multiple types.
+- `exit` The program has exited abnormally, eg via `exit;`.
+- `return[T]` The program has returned a value of type `T`. `T` can be
+  multiple types. `T` can be `ref` to indicate returning by reference, or
+  `undefined` to indicate that no value is returned (ie `void`).
+- `break N` The program has requested to break N loops.
+- `continue N` The program has requested to continue N loops.
+- `goto L` The program has requested to goto the specified label. _GOTOs are
+  ignored by static analysis._
+
+Static analysis maintains multiple possible program states as it steps through
+the program. Only states in `next` state are passed through each
+statement/expression, possibly splitting into multiple possible states.
+
+Here is a description of how the different control structures operate on
+program state.
+
+# if/else
+
+The program state splits in two, one for the `if` branch and one for the
+`else`. For the `if` branch, the `if` expression is evaluated and the
+expression is passed `true` specifying that it can assume that it will
+evaluate to true. Depending on the expression, this will change the program
+state according to assumptions in the expression.
+
+For example, the expression `$foo instanceof Bar`, when evaluated with `true`
+as its known result, will change the `$foo` variable to be of type class
+`Bar`. When evaluated with `false` as its known result, it will remove class
+`Bar` from the list of possible states for the `$foo` variable, if it is
+present.
+
+The following expressions will modify the program state when placed in an `if`
+block:
+
+- `$foo instanceof Bar` The types of `$foo` are filtered to only include
+  instances of `Bar`. Any object/class types for variable `$foo` of which
+  `Bar` is a subclass (including `object`), are replaced with simply `Bar`.
+- `$foo === true` `$foo` is filtered to only include `true`.
+- `$foo === false` `$foo` is filtered to only include `false`.
+- `$foo === null` `$foo` is filtered to only include `null`.
+- `is_string($foo)` `$foo` is filtered to only include `string`.
+- `is_null($foo)` `$foo` is filtered to only include `null`.
+- `is_int($foo)` `$foo` is filtered to only include `int`.
+- `is_object($foo)` `$foo` is filtered to only include `object`.
+- `is_float($foo)` `$foo` is filtered to only include `float`.
+- `is_bool($foo)` `$foo` is filtered to only include `true` and `false`.
+- `is_array($foo)` `$foo` is filtered to only include array types.
+- `is_resource($foo)` `$foo` is filtered to only include `resource`.
+- `!...` The inner expression is applied to the program state with the
+  opposite effect, ie as the expression for an `if` block it behaves as though
+  it was the `else` block.
+- `... && ...` The program state is filtered through the expression on the
+  left and then the expression on the right.
+- `isset($foo)` `$foo` is filtered to exclude `undefined` and `null`.
+- `empty($foo)` `$foo` is filtered to exclude types which are always truthy.
+- `!empty($foo)` `$foo` is filtered to exclude types which are always falsy,
+  and `undefined`.
+
+Note:
+
+    The following types are always truthy:
     - `object`
-        - `<Class>`
-        - `this` The same as `self` except will be the whatever the concrete
-          class the method was called on.
-        - `static` The same as `self` except will be the 
-    - `Closure[..., ...]:...`
-    - `(...)[]`
+    - `true`
+    - `resource`
 
-## Composed types
+    The following types are always falsy:
+    - `null`
+    - `false`
 
-- `...|...|...` Can be any of the listed types.
+    The following types are neither always truthy nor always falsy:
+    - `ref` (since it evaluates as `mixed`)
+    - `int`
+    - `string`
+    - `float`
+    - `T[]`
 
-  Allowed operations are those that are allowed on _all_ of the listed types.
-- `...&...&...` Must be all of the listed types, simultaneously.
+For the `else` branch, the same is done except the applicable type is
+_removed_ from the list, if present (since we definitely know that that's not
+what the variable is going to be).
 
-  Allowed operations are those that are allowed on _any_ of the listed types.
+Note that after filtering the types may result in the variable having an empty
+list of possible states. This represents an impossible program state and the
+code run in this state is considered dead.
 
-  Typically only satisfiable if the types are classes/interfaces and an object
-  is an `instanceof` all of them.
+Note also that set of states for variable `$foo` may include `ref`, which
+cannot be filtered out. A variable in state `ref` remains in state `ref` until
+it is `unset`.
 
-## Aliases
+Chained `if`/`else if`/`else` branches are considered as nested `if`/`else`
+statements. `if` blocks lacking an `else` block are considered to have an
+empty `else` block. 
 
-- `bool` => `true|false`
-- `boolean` => `bool`
-- `integer` => `int`
-- `double` => `float`
-- `self` => (current class)
-- `parent` => (parent class)
-- `array` => `mixed[]`
-- `$this` => `this`
-- `void` => `undefined`
+After the program states have passed through the `if` and `else` blocks, they
+are merged together. Note that program states with different `runstate` values
+(eg if the `if` branch caused a `return`) cannot be merged together and remain
+seperate.
 
-# Syntax
+# while
 
-The three types of l-values in PHP are:
+A `while` loop is handled the exact same way as an `if` block with an empty
+`else` block, ie, the program is split in two, one assuming the expression is
+`true` the other assuming the expression is `false`. However, for the `true`
+case of the expression, if the resulting program state is not _included_ in (ie
+it is not a subset of) the program state when the loop was first entered, then
+it is _added_ to the initial program state and the loop is run again, and the
+process repeats. The static analysis of a real while loop dealing in values is
+implemented as a while loop dealing in types. ;)
+
+In terms of data flow analysis, this amounts to calculating the "fixed-point"
+of the data flow, and is intended to handle situations such as these:
 
 ```php
-$var   # named variable
-${...} # dynamic variable
-
-...->prop   # named property
-...->${...} # dynamic property
-
-...['foo'] # named key
-...[...]   # dynamic key
+$a = 1;
+$b = 's';
+$c = true;
+while (blah()) {
+    $a = $b;
+    $b = $c;
+}
 ```
 
-l-values can be both written to (used on the left of `=`) and read from (used as an expression, eg on the right of `=`).
+Before the run of the loop, `$a` is `int`, after one run it is `string` which
+is merged with the initial state to make `int|string` and after a second run
+it is `true`, which is merged again to make `int|string|true`, and after a
+third run `$a` is still `true` which is included in `int|string|true` and the
+process ends.
 
-l-values can also be used as a source and destination for references, that is, can be bound as a reference to another l-value, and another l-value can be bound to it.
+## break/continue
 
-Functions can also be used as a source and destination for references.
+The program state from a run of a loop may have `runstate` set to `break` or
+`continue`. The case of `continue` is replaced with `next` and handled as
+`next`. The case of `break` is replaced with `next` and the program state is
+added to the possible output states from the `while` loop and not added to the
+state of the loop on entry.
 
-If a function paramter is taken by reference, an l-value must be passed, not just any expression, and it behaves as though the l-value appeared on the right-hand side of the `=&` operator.
+The case of `break N` or `continue N` where _N > 1_ are both handled as
+`break`, and _N_ is decremented.
 
-If a function returns a reference, then a call to that function may appear on the right hand side of the `=&` operator.
+# do-while
 
-Array literals can include references also, as in `['foo' => &$bar]`, which has the same effect on `$bar` as though `$bar` hed appeared on the right hand side of `=&`.
+Same as a `while` loop except the first run happens unconditionally.
 
-For loops using references, eg `for ($a as &$b) {...}` have the same effect on both `$a` and `$b` as `$b =& $a[...]` (where `...` is unknown).
+# for loop
 
-A reference in a Closure's `use` list, eg `function () use (&$b) {...}` has the same effect on `$b` as appearing on the right hand side of `=&`. `$b` is set to a reference inside the body of the function.
+Decompiles to a `while` loop, eg:
 
-# Operations
-
-## References
-
-The `deref` operation is defined by:
 ```
-deref Ref[x] = x
-deref undefined = error
-deref x = x
-```
-
-The `toref` operation is defined by:
-```
-toref Ref[x] = Ref[x]
-toref undefined = Ref[null]
-toref x = Ref[x]
+for (stmt1; expr1; stmt2) {
+    stmt3;
+}
 ```
 
-- `$a = expr` 
-    - If `$a` is a local variable.
-        - If `$a` is a reference, checks that the expression satisfies the
-          reference type.
-        - Otherwise variable `$a` is set to be `deref(expr)`
-    - If `$a` is an object property, `deref(expr)` must be a contained in the
-      type of the property, and the type of the property is unchanged.
-    - If `$a` is an array entry, `deref(expr)` is added to the list of types
-      inside the array.
-- `$a =& $b` Variables `$a` and `$b` are set to be `toref($b)`. For both `$a`
-  and `$b`:
-    - If it is an object property, the type inside the new `Ref[...]` type
-      must be _equal_ to the type of the property, and the type of the
-      property is left unchanged.
-    - If it is an array entry, the new `Ref[...]` type is _added_ to the list
-      of possible types inside the array.
-- `isset($a)` case `deref(toref($a))`
-    - `null` => `false`
-    - `...` => `true`
-- `unset($a)` `$a` is set to undefined, the effect being:
-    - If `$a` is a local variable, it is removed.
-    - If `$a` is an array entry, nothing is done, since `undefined` is always
-      a possible value of array values.
-    - If `$a` is an object property, `undefined` must be a possible type for
-      the property.
-- `global $foo` Sets `$foo` to be `Ref[...]` using the derefed type of the
-  `$foo` global variable.
+is handled the same as
+
+```
+stmt1;
+while (expr1) {
+    stmt3;
+    stmt2;
+}
+```
+
+with one important exception: `stmt2` is executed if the program is in `next`
+_or_ `continue` state, not just `next`.
+
+# foreach
+
+eg
+
+```
+foreach (expr as $k => $v) {
+    stmts
+}
+```
+
+A `foreach` is handled the same as a `while` loop, however there is no
+"condition" which the loop body can assume is true (as in the case of a
+`while` loop), so that part doesn't apply.
+
+`expr` is evaluated once before the loop starts. There are three posible cases
+for `expr`:
+
+- If `expr` evaluates to an `array`, `$k` is assigned to `int|string` and `$v`
+  is assigned set to the type wrapped by the array, ie the same as `$k =
+  int|string; $v = expr[...];`.
+- If `expr` evaluates to an object that implements the `Iterator` or
+  `IteratorAggregate` interface, then `$k` is set to the return type of
+  `Iterator::key()` and `$v` is set to the return type of
+  `Iterator::current()`.
+- Otherwise an error is logged and both `$v` and `$k` are set to `mixed`.
+
+In the case of by-reference loop:
+
+```
+foreach (expr as $k => &$v) {
+    stmts
+}
+```
+
+`expr` must be an l-value and evaluate to an `array`, `$v` is set to `ref` and
+`$k` is set to `int|string`. `ref` is added to the possible var states inside
+the array of `expr`.
+
+# switch
+
+The expression at the head of the `switch` block is evaluated and the program
+begins stepping through the `case` statements. At each `case` statement, the
+`case` expression is evaluated and the program splits in two, one starting on
+this `case` statement and another moving onto the next `case` statement. After
+the last `case` statement, the program starts at the `default` case. If there
+is no `default` case, an empty one is assumed.
+
+This results in _N+1_ program states, where _N_ is the number of `case`
+statements. For all program states, the `break` runstate is replaced with
+`next` and the program states are merged together.
+
+Note that each `case` branch is run in a state after having evaluated the
+previous `case` expressions, and the `default` branch is run in a state after
+having evaluated all the `case` expressions. This is important as the
+expressions may have side effects.
+
+# return
+
+Simply evaluates the returned expression, if any, and adds it to the list of
+possible return values, and sets the program `runstate` to `return`.
+
+# goto
+
+_GOTOs are ignored._
+
+# throw
+
+A `throw EXPR;` statement replaces the program state with `throw(T)` where `T`
+is the type of `EXPR`.
+
+# try-catch-finally
+
+```
+try {
+    // ...
+} catch (A $a) {
+    // ...
+} catch (B $b) {
+    // ...
+} finally {
+    // ...
+}
+```
+
+The body of the `try` block is executed normally. Any resulting program states
+with `runstate = throw` are considered for the `catch` blocks. For each
+`catch` block, if the exception class is in the list of possibly thrown
+exceptions, then it is removed, and the program splits, sets `runstate = next`
+and sets the catch variable to be an instance of the exception class.
+
+With all possible program states resulting from the `try` and `catch` blocks,
+except those in state `exit`, the `finally` block is executed. To do so, for
+each program state, the `runstate` is captured and reset to `next`. The
+program state is sent through the `finally` block. (It may split into multiple
+program states due to `ifs` inside the `finally`, etc) For each resulting
+program state, if the `runstate` is still `next`, then it is set to whatever
+it was before the `finally`.
+
+Here is an example:
+
+```php
+try {
+    if (bar()) {
+        throw new BarException;
+    } else {
+        $a = 'b';
+    }
+
+    // 2 program states:
+    // - runstate: next, $a = string
+    // - runstate: throw[BarException]
+}
+
+catch (FooException $e) {
+    // ignored, since FooException isn't in the list of thrown exceptions
+}
+
+catch (BarException $e) {
+    // the program state "runstate: throw[BarException]" matches
+    // the catch block, and enters here
+    return 'foo';
+    // program state becomes "runstate: return[string]"
+}
+
+// 2 program states:
+// - runstate: next, $a = string
+// - runstate: return[string]
+
+finally {
+    // 2 program states:
+    // - runstate: next, $a = string
+    // - runstate: next
+    if ($a === 'b') {
+        break;
+    }
+    // 2 program states:
+    // - runstate: break, $a = string
+    // - runstate: next
+}
+
+// 2 program states:
+// - runstate: break, $a = string
+// - runstate: return[string]
+```
 
