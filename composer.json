@@ -6,6 +6,7 @@
         "phpunit/phpunit": "^4.7"
     },
     "autoload": {
-        "classmap": [""]
+        "classmap": [""],
+        "files": ["utils.php"]
     }
 }
