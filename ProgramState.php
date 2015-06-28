@@ -190,7 +190,7 @@ class ProgramStates {
 
     function unparse() {
         $state = clone $this->next;
-        $state->import($this->return);
+        $state->import(clone $this->return);
         return $state->unparse();
     }
 

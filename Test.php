@@ -32,7 +32,7 @@ else
 s
         );
         self::assertEquals(<<<'s'
-$a = float|int|string
+$a = float|int|string|void
 return string|void
 s
             , $state->unparse() );
