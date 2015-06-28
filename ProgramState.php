@@ -48,14 +48,19 @@ class ProgramState {
     }
 
     function import(self $that) {
-        $this->return->import($that->return);
-        $this->default->import($that->default);
+        $changed = false;
+        $changed = $this->return->import($that->return) || $changed;
+        $changed = $this->default->import($that->default) || $changed;
 
         $vars = array_keys(array_replace($this->vars, $that->vars));
 
         foreach ($vars as $name) {
-            $this->variable($name)->import($that->variable($name));
+            $var1    = $this->variable($name);
+            $var2    = $that->variable($name);
+            $changed = $var1->import($var2) || $changed;
         }
+
+        return $changed;
     }
 }
 
@@ -114,6 +119,13 @@ class ProgramStates {
             return [new Int];
         } else if ($expr instanceof \PhpParser\Node\Scalar\DNumber) {
             return [new Float];
+        } else if ($expr instanceof \PhpParser\Node\Expr\Variable) {
+            $var = $expr->name;
+            if (!is_string($var)) {
+                return [new Mixed];
+            } else {
+                return $this->next->variable($var)->get();
+            }
         } else {
             throw new \Exception('unhandled expr: ' . typeof($expr));
         }
@@ -170,6 +182,16 @@ class ProgramStates {
                 $this->next->setReturn($this->evaluate($expr, null));
             $this->return->import($this->next);
             $this->next = new ProgramState(true);
+        } else if ($stmt instanceof \PhpParser\Node\Stmt\While_) {
+            $cond  = $stmt->cond;
+            $stmts = $stmt->stmts;
+            do {
+                $true = clone $this;
+                $true->evaluate($cond, true);
+                $true->executeAll($stmts);
+            } while ($this->import($true));
+
+            $this->evaluate($cond, false);
         } else {
             throw new \Exception('unhandled stmt: ' . typeof($stmt));
         }
@@ -203,23 +225,32 @@ class ProgramStates {
     }
 
     function import(self $that) {
-        $this->next->import($that->next);
-        $this->return->import($that->return);
+        $changed = false;
+        $changed = $this->next->import($that->next) || $changed;
+        $changed = $this->return->import($that->return) || $changed;
 
         $throws    = array_keys(array_replace($this->throw, $that->throw));
         $breaks    = array_keys(array_replace($this->break, $that->break));
         $continues = array_keys(array_replace($this->continue, $that->continue));
 
         foreach ($throws as $exception) {
-            $this->throw_($exception)->import($that->throw_($exception));
+            $state1  = $this->throw_($exception);
+            $state2  = $that->throw_($exception);
+            $changed = $state1->import($state2) || $changed;
         }
 
         foreach ($breaks as $level) {
-            $this->break_($level)->import($that->break_($level));
+            $state1  = $this->break_($level);
+            $state2  = $that->break_($level);
+            $changed = $state1->import($state2) || $changed;
         }
 
         foreach ($continues as $level) {
-            $this->continue_($level)->import($that->break_($level));
+            $state1  = $this->continue_($level);
+            $state2  = $that->continue_($level);
+            $changed = $state1->import($state2) || $changed;
         }
+
+        return $changed;
     }
 }

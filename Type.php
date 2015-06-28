@@ -20,6 +20,9 @@ abstract class VarState {
     function set(array $types) {
         return $types;
     }
+
+    /** @return Type[] */
+    abstract function get();
 }
 
 class Ref extends VarState {
@@ -28,13 +31,18 @@ class Ref extends VarState {
     function set(array $types) {
         return [$this];
     }
+
+    function get() { return [new Mixed]; }
 }
 
 class Undefined extends VarState {
     function unparse() { return 'void'; }
+
+    function get() { return [new Null]; }
 }
 
 abstract class Type extends VarState {
+    function get() { return [$this]; }
 }
 
 class Int extends Type {
@@ -235,5 +243,13 @@ class Variable {
         $this->states = [];
         foreach ($states as $state)
             $this->addMany($state->set($types));
+    }
+
+    function get() {
+        /** @var Type[] $types */
+        $types = [];
+        foreach ($this->states as $state)
+            $types = array_merge($types, $state->get());
+        return $types;
     }
 }

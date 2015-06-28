@@ -14,7 +14,7 @@ s
 $a = string
 return void
 s
-            , $state->unparse() );
+            , $state->unparse());
     }
 
     function testIf() {
@@ -35,6 +35,34 @@ s
 $a = float|int|string|void
 return string|void
 s
-            , $state->unparse() );
+            , $state->unparse());
+    }
+
+    function testWhile() {
+        $state = new ProgramStates;
+        $state->process(<<<'s'
+<?php
+
+$t = 1;
+
+$a = 8.2;
+$b = 9;
+$c = 'hello';
+
+while ($t = 't') {
+    $a = $b;
+    $b = $c;
+}
+
+s
+        );
+        self::assertEquals(<<<'s'
+$a = float|int|string
+$b = int|string
+$c = string
+$t = string
+return void
+s
+            , $state->unparse());
     }
 }
