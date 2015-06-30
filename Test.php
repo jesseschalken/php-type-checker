@@ -65,4 +65,27 @@ return void
 s
             , $state->unparse());
     }
+
+    function testBreak() {
+        $state = new ProgramStates;
+        $state->process(<<<'s'
+<?php
+
+while ($t = 't') {
+    $a = 6;
+    break;
+    $b = 7;
+    return 9;
+}
+
+s
+        );
+        self::assertEquals(<<<'s'
+$a = int|void
+$b = void
+$t = string
+return void
+s
+            , $state->unparse());
+    }
 }

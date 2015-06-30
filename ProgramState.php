@@ -50,7 +50,6 @@ class ProgramState {
     function import(self $that) {
         $changed = false;
         $changed = $this->return->import($that->return) || $changed;
-        $changed = $this->default->import($that->default) || $changed;
 
         $vars = array_keys(array_replace($this->vars, $that->vars));
 
@@ -59,6 +58,9 @@ class ProgramState {
             $var2    = $that->variable($name);
             $changed = $var1->import($var2) || $changed;
         }
+
+        // must come last!
+        $changed = $this->default->import($that->default) || $changed;
 
         return $changed;
     }
@@ -108,7 +110,16 @@ class ProgramStates {
     function evaluate(\PhpParser\Node\Expr $expr, $assume) {
         if ($expr instanceof \PhpParser\Node\Expr\Assign) {
             $var = $expr->var;
-            $var = $var instanceof \PhpParser\Node\Expr\Variable ? $var->name : '__unknown';
+            if ($var instanceof \PhpParser\Node\Expr\Variable) {
+                $var = $var->name;
+                if ($var instanceof \PhpParser\Node\Expr) {
+                    $this->log("\"Variable variables\" are not supported", $var);
+                    $var = '__unknown';
+                }
+            } else {
+                // TODO
+                $var = 'uhm';
+            }
             $var = $this->next->variable($var);
             $val = $this->evaluate($expr->expr, $assume);
             $var->set($val);
@@ -185,13 +196,45 @@ class ProgramStates {
         } else if ($stmt instanceof \PhpParser\Node\Stmt\While_) {
             $cond  = $stmt->cond;
             $stmts = $stmt->stmts;
+            $this->pushBreak();
             do {
                 $true = clone $this;
+                $true->pushContinue();
                 $true->evaluate($cond, true);
                 $true->executeAll($stmts);
+                $true->popContinue();
             } while ($this->import($true));
 
             $this->evaluate($cond, false);
+            $this->popBreak();
+        } else if ($stmt instanceof \PhpParser\Node\Stmt\Break_ ||
+                   $stmt instanceof \PhpParser\Node\Stmt\Continue_
+        ) {
+            $num = $stmt->num;
+
+            if ($num === null) {
+                $num = 1;
+            } else if ($num instanceof \PhpParser\Node\Scalar\LNumber) {
+                $num = $num->value;
+            } else {
+                $this->log("Expressions for break/continue statements are not supported", $num);
+                $num = 1;
+            }
+
+            if ($num < 1) {
+                $this->log("A break/continue of $num levels? That doesn't make sense.", $stmt);
+                $num = 1;
+            }
+
+            if ($stmt instanceof \PhpParser\Node\Stmt\Break_)
+                $state = $this->break_($num - 1);
+            else if ($stmt instanceof \PhpParser\Node\Stmt\Continue_)
+                $state = $this->continue_($num - 1);
+            else
+                throw new \Exception('what?');
+
+            $state->import($this->next);
+            $this->next = new ProgramState(true);
         } else {
             throw new \Exception('unhandled stmt: ' . typeof($stmt));
         }
@@ -252,5 +295,29 @@ class ProgramStates {
         }
 
         return $changed;
+    }
+
+    function pushBreak() {
+        array_unshift($this->break, new ProgramState(true));
+    }
+
+    function popBreak() {
+        $state = array_shift($this->break);
+        if ($state)
+            $this->next->import($state);
+    }
+
+    function pushContinue() {
+        array_unshift($this->continue, new ProgramState(true));
+    }
+
+    function popContinue() {
+        $state = array_shift($this->continue);
+        if ($state)
+            $this->next->import($state);
+    }
+
+    function log($message, \PhpParser\Node $node) {
+        // TODO
     }
 }
