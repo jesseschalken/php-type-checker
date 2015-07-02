@@ -4,6 +4,44 @@ namespace PhpTypeChecker;
 
 abstract class VarState {
     /**
+     * @param static[] $s
+     * @return static[]
+     */
+    static final function unique(array $s) {
+        $r = [];
+        foreach ($s as $ss)
+            if (!$ss->inSet($r))
+                $r[] = $ss;
+        return $r;
+    }
+
+    /**
+     * @param static[] $a
+     * @param static[] $b
+     * @return bool
+     */
+    static final function eqSet(array $a, array $b) {
+        foreach ($a as $aa)
+            if (!$aa->inSet($b))
+                return false;
+        foreach ($b as $bb)
+            if (!$bb->inSet($a))
+                return false;
+        return true;
+    }
+
+    /**
+     * @param static[] $a
+     * @return bool
+     */
+    final function inSet(array $a) {
+        foreach ($a as $as)
+            if ($as->eq($this))
+                return true;
+        return false;
+    }
+
+    /**
      * @param VarState $that
      * @return bool
      */
@@ -178,6 +216,48 @@ class Array_ extends Type {
     }
 }
 
+class Structure {
+    /** @var VarState[][] */
+    private $keys = [];
+    /** @var VarState[] */
+    private $default = [];
+
+    /**
+     * @param string|null $key
+     * @param callable $f
+     */
+    function mapStates($key, callable $f) {
+        if ($key !== null) {
+            $this->keys[$key] = array_map_merge($f, $this->getStates($key));
+        } else {
+            foreach ($this->keys as $k => $v)
+                $this->keys[$k] = array_map_merge($f, $v);
+
+            $this->default = array_merge(
+                $this->default,
+                array_map_merge($f, $this->default)
+            );
+        }
+    }
+
+    /**
+     * @param string|null $key
+     * @return VarState[]
+     */
+    function getStates($key) {
+        if ($key === null) {
+            return array_merge(
+                $this->default,
+                array_merge_many($this->keys)
+            );
+        } else if (array_key_exists($key, $this->keys)) {
+            return $this->keys[$key];
+        } else {
+            return $this->default;
+        }
+    }
+}
+
 class Variable {
     /** @var VarState[] */
     private $states = [];
@@ -239,7 +319,7 @@ class Variable {
      * @param Type[] $types
      */
     function set(array $types) {
-        $states       = $this->states;
+        $states = $this->states;
         $this->states = [];
         foreach ($states as $state)
             $this->addMany($state->set($types));

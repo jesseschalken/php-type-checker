@@ -63,3 +63,21 @@ function typeof($x) {
     }
 }
 
+/**
+ * @param callable $callback
+ * @param array $array
+ * @return array
+ */
+function array_map_merge(callable $callback, array $array) {
+    return array_merge_many(array_map($callback, $array));
+}
+
+/**
+ * @param array[] $arrays
+ * @return array
+ */
+function array_merge_many(array $arrays) {
+    return call_user_func_array('array_merge', array_values($arrays));
+}
+
+
