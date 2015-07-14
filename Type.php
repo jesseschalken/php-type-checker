@@ -178,7 +178,7 @@ class Callable_ extends Object {
 
     function __clone() {
         $this->return = clone $this->return;
-        $this->params = clone_any($this->params);
+        $this->params = clone_array($this->params);
     }
 
     function unparse() {
@@ -228,14 +228,17 @@ class Structure {
      */
     function mapStates($key, callable $f) {
         if ($key !== null) {
-            $this->keys[$key] = array_map_merge($f, $this->getStates($key));
+            if (!array_key_exists($key, $this->keys))
+                $this->keys[$key] = clone_array($this->default);
+
+            $this->keys[$key] = array_map_merge($f, $this->keys[$key]);
         } else {
             foreach ($this->keys as $k => $v)
                 $this->keys[$k] = array_map_merge($f, $v);
 
             $this->default = array_merge(
                 $this->default,
-                array_map_merge($f, $this->default)
+                array_map_merge($f, clone_array($this->default))
             );
         }
     }
@@ -271,7 +274,7 @@ class Variable {
     }
 
     function __clone() {
-        $this->states = clone_any($this->states);
+        $this->states = clone_array($this->states);
     }
 
     function eq(self $that) {

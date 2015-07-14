@@ -16,7 +16,7 @@ class ProgramState {
     }
 
     function __clone() {
-        $this->vars    = clone_any($this->vars);
+        $this->vars    = clone_array($this->vars);
         $this->return  = clone $this->return;
         $this->default = clone $this->default;
     }
@@ -207,8 +207,9 @@ class ProgramStates {
 
             $this->evaluate($cond, false);
             $this->popBreak();
-        } else if ($stmt instanceof \PhpParser\Node\Stmt\Break_ ||
-                   $stmt instanceof \PhpParser\Node\Stmt\Continue_
+        } else if (
+            $stmt instanceof \PhpParser\Node\Stmt\Break_ ||
+            $stmt instanceof \PhpParser\Node\Stmt\Continue_
         ) {
             $num = $stmt->num;
 
@@ -262,9 +263,9 @@ class ProgramStates {
     function __clone() {
         $this->return   = clone $this->return;
         $this->next     = clone $this->next;
-        $this->throw    = clone_any($this->throw);
-        $this->break    = clone_any($this->break);
-        $this->continue = clone_any($this->continue);
+        $this->throw    = clone_array($this->throw);
+        $this->break    = clone_array($this->break);
+        $this->continue = clone_array($this->continue);
     }
 
     function import(self $that) {

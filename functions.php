@@ -3,19 +3,17 @@
 namespace PhpTypeChecker;
 
 /**
- * @param mixed $a
- * @return mixed
+ * @param array $a
+ * @return array
  */
-function clone_any($a) {
-    if (is_array($a)) {
-        foreach ($a as $k => $v)
-            $a[$k] = clone_any($v);
-        return $a;
-    } else if (is_object($a)) {
-        return clone $a;
-    } else {
-        return $a;
+function clone_array(array $a) {
+    foreach ($a as $k => $v) {
+        if (is_array($v))
+            $a[$k] = clone_array($v);
+        else if (is_object($v))
+            $a[$k] = clone $v;
     }
+    return $a;
 }
 
 /**
@@ -43,10 +41,13 @@ function typeof($x) {
             $types[] = typeof($v);
         $types = array_unique($types, SORT_STRING);
         sort($types, SORT_STRING);
-        if (count($types) == 1) {
-            return "$types[0][]";
-        } else {
-            return "(" . join('|', $types) . ")[]";
+        switch (count($types)) {
+            case 0:
+                return 'void[]';
+            case 1:
+                return "$types[0][]";
+            default:
+                return "(" . join('|', $types) . ")[]";
         }
     } else if (is_resource($x)) {
         return 'resource';
