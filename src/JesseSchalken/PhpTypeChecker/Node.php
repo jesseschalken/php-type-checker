@@ -1,6 +1,6 @@
 <?php
 
-namespace JS\PhpTypeChecker\Node;
+namespace JesseSchalken\PhpTypeChecker\Node;
 
 use PhpParser\Lexer\Emulative;
 use PhpParser\Node;
