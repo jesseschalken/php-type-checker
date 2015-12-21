@@ -8,14 +8,21 @@ use PhpParser\Parser\Php7;
 
 class Parser {
     /**
-     * @param string $file
-     * @return StmtBlock
+     * @param string[] $files
+     * @return StmtBlock[]
      */
-    static function parse($file) {
+    static function parseFiles(array $files):array {
+        /** @var Node[][] $parsed */
+        $parsed = [];
         $parser = new Php7(new Emulative());
-        $parsed = $parser->parse($file);
-        $stmts  = self::parseStmts($parsed, new Namespace_(''));
-        return $stmts;
+        foreach ($files as $file) {
+            $parsed[$file] = $parser->parse(file_get_contents($file));
+        }
+        $result = [];
+        foreach ($parsed as $file => $nodes) {
+            $result[$file] = self::parseBlock($nodes, new Namespace_(''));
+        }
+        return $result;
     }
 
     /**
@@ -23,41 +30,65 @@ class Parser {
      * @param Namespace_  $ns
      * @return StmtBlock
      */
-    private static function parseStmts(array $nodes, Namespace_ $ns):StmtBlock {
+    private static function parseBlock(array $nodes, Namespace_ $ns):StmtBlock {
         /** @var SingleStmt[] $stmts */
         $stmts = [];
-        foreach ($nodes as $node) {
-            $stmts[] = self::parseStmt($node, $ns);
-        }
+        self::parseStmts($nodes, $ns, $stmts);
         return new StmtBlock($stmts);
     }
 
-    private static function parseStmt(Node $node, Namespace_ $ns):SingleStmt {
-        if ($node instanceof Node\Expr) {
-            return self::parseExpr($node, $ns);
-        } else if ($node instanceof Node\Stmt\If_) {
-            $false = self::parseStmts($node->else ? $node->else->stmts : [], $ns);
+    /**
+     * @param Node\Stmt[] $nodes
+     * @param Namespace_  $ns
+     * @param Stmt[]      $stmts
+     * @throws \Exception
+     */
+    private static function parseStmts(array $nodes, Namespace_ $ns, array &$stmts) {
+        foreach ($nodes as $node) {
+            if ($node instanceof Node\Expr) {
+                $stmts[] = self::parseExpr($node, $ns);
+            } else if ($node instanceof Node\Stmt\If_) {
+                $false = self::parseBlock($node->else ? $node->else->stmts : [], $ns);
 
-            foreach (array_reverse($node->elseifs) as $elseIf) {
-                $false = new StmtBlock([new If_(
-                    self::parseExpr($elseIf->cond, $ns),
-                    self::parseStmts($elseIf->stmts, $ns),
+                foreach (array_reverse($node->elseifs) as $elseIf) {
+                    $false = new StmtBlock([new If_(
+                        self::parseExpr($elseIf->cond, $ns),
+                        self::parseBlock($elseIf->stmts, $ns),
+                        $false
+                    )]);
+                }
+
+                $stmts[] = new If_(
+                    self::parseExpr($node->cond, $ns),
+                    self::parseBlock($node->stmts, $ns),
                     $false
-                )]);
+                );
+            } else if ($node instanceof Node\Stmt\Return_) {
+                $expr    = $node->expr;
+                $expr    = $expr ? self::parseExpr($expr, $ns) : null;
+                $stmts[] = new Return_($expr);
+            } else if ($node instanceof Node\Stmt\Namespace_) {
+                self::parseNamespace($node, $stmts);
+            } else if ($node instanceof Node\Stmt\Class_) {
+                $stmts[] = new Class_();
+            } else if ($node instanceof Node\Stmt\Function_) {
+                $stmts[] = new Function_();
+            } else {
+                throw new \Exception('Unhandled statement type: ' . get_class($node));
             }
-
-            return new If_(
-                self::parseExpr($node->cond, $ns),
-                self::parseStmts($node->stmts, $ns),
-                $false
-            );
-        } else if ($node instanceof Node\Stmt\Return_) {
-            $expr = $node->expr;
-            $expr = $expr ? self::parseExpr($expr, $ns) : null;
-            return new Return_($expr);
-        } else {
-            throw new \Exception('Unhandled statement type: ' . get_class($node));
         }
+    }
+
+    private static function parseNamespace(Node\Stmt\Namespace_ $node, array &$stmts) {
+        $name   = $node->name;
+        $name   = $name ? join('\\', $name->parts) . '\\' : '';
+        $stmts_ = $node->stmts;
+        $ns     = new Namespace_($name);
+        foreach ($stmts_ as $k => $stmt) {
+            // TODO handle Use here and remove from $stmts_
+        }
+
+        self::parseStmts($stmts_, $ns, $stmts);
     }
 
     private static function parseExpr(Node\Expr $node, Namespace_ $ns):Expr {
@@ -68,21 +99,84 @@ class Parser {
             $right = self::parseExpr($node->expr, $ns);
             return new Assign($left, $right);
         } else if ($node instanceof Node\Scalar\LNumber) {
-            return new Int_($node->value);
+            return new Literal($node->value);
         } else if ($node instanceof Node\Scalar\DNumber) {
-            return new Float_($node->value);
+            return new Literal($node->value);
+        } else if ($node instanceof Node\Expr\Include_) {
+            switch ($node->type) {
+                case Node\Expr\Include_::TYPE_INCLUDE:
+                case Node\Expr\Include_::TYPE_INCLUDE_ONCE:
+                    $require = false;
+                    break;
+                case Node\Expr\Include_::TYPE_REQUIRE:
+                case Node\Expr\Include_::TYPE_REQUIRE_ONCE:
+                    $require = true;
+                    break;
+                default:
+                    throw new \Exception("Unknown require type: {$node->type}");
+            }
+            switch ($node->type) {
+                case Node\Expr\Include_::TYPE_INCLUDE:
+                case Node\Expr\Include_::TYPE_REQUIRE:
+                    $once = false;
+                    break;
+                case Node\Expr\Include_::TYPE_INCLUDE_ONCE:
+                case Node\Expr\Include_::TYPE_REQUIRE_ONCE:
+                    $once = true;
+                    break;
+                default:
+                    throw new \Exception("Unknown require type: {$node->type}");
+            }
+
+            return new Include_(self::parseExpr($node->expr, $ns), $require, $once);
+        } else if ($node instanceof Node\Expr\BinaryOp\Concat) {
+            return new Concat(
+                self::parseExpr($node->left, $ns),
+                self::parseExpr($node->right, $ns)
+            );
+        } else if ($node instanceof Node\Scalar\MagicConst) {
+            return new MagicConst($node->getName());
+        } else if ($node instanceof Node\Scalar\String_) {
+            return new Literal($node->value);
+        } else if ($node instanceof Node\Expr\StaticCall) {
+            $method = $node->name;
+            $class  = $node->class;
+            if (is_string($method)) {
+                $method = new Literal($method);
+            }
+            if ($class instanceof Node\Name) {
+                $class = new Literal($ns->resolveClass($class));
+            }
+            return new StaticCall(self::parseArgs($node->args, $ns), $class, $method);
         } else {
             throw new \Exception('Unhandled expression type: ' . get_class($node));
         }
     }
 
+    /**
+     * @param Node\Arg[] $args
+     * @param Namespace_ $ns
+     * @return CallArg[]
+     * @throws \Exception
+     */
+    private static function parseArgs(array $args, Namespace_ $ns) {
+        $result = [];
+        foreach ($args as $arg) {
+            $byRef    = $arg->byRef;
+            $splat    = $arg->unpack;
+            $expr     = self::parseExpr($arg->value, $ns);
+            $result[] = new CallArg($expr, $byRef, $splat);
+        }
+        return $result;
+    }
+
     private static function parseLValue(Node\Expr $expr, Namespace_ $ns):LValue {
         if ($expr instanceof Node\Expr\Variable) {
-            if (is_string($expr->name)) {
-                return new Variable($expr->name);
-            } else {
-                return new DynamicVariable(self::parseExpr($expr->name, $ns));
+            $name = $expr->name;
+            if (is_string($name)) {
+                $name = new Literal($name);
             }
+            return new Variable($name);
         } else {
             throw new \Exception('Unhandled lvalue: ' . get_class($expr));
         }
@@ -99,7 +193,10 @@ class Namespace_ {
     /** @var string[] */
     private $useConst = [];
 
-    function __construct(\string $prefix) {
+    /**
+     * @param string $prefix
+     */
+    function __construct($prefix) {
         $this->prefix = $prefix;
     }
 
@@ -149,6 +246,10 @@ final class StmtBlock extends Stmt {
      */
     public function __construct(array $stmts = []) {
         $this->stmts = $stmts;
+    }
+
+    public function stmts() {
+        return $this->stmts;
     }
 }
 
@@ -211,47 +312,193 @@ class LValue extends Expr {
 }
 
 class Variable extends LValue {
-    /** @var string */
+    /** @var Expr */
     private $name;
 
-    public function __construct(\string $name) {
+    public function __construct(Expr $name) {
         $this->name = $name;
     }
 }
 
 class DynamicVariable extends LValue {
+}
+
+class Include_ extends Expr {
+    private $require = true;
+    private $once    = true;
     /** @var Expr */
     private $expr;
 
-    public function __construct(Expr $expr) {
-        $this->expr = $expr;
+    /**
+     * @param Expr $expr
+     * @param bool $require
+     * @param bool $once
+     */
+    public function __construct(Expr $expr, $require, $once) {
+        $this->require = $require;
+        $this->once    = $once;
+        $this->expr    = $expr;
     }
 }
 
-class Int_ extends Expr {
-    /** @var int */
-    private $value;
+class Concat extends Expr {
+    /** @var  Expr */
+    private $left;
+    /** @var  Expr */
+    private $right;
 
-    function __construct(\int $value) {
-        $this->value = $value;
+    /**
+     * @param Expr $left
+     * @param Expr $right
+     */
+    public function __construct(Expr $left, Expr $right) {
+        $this->left  = $left;
+        $this->right = $right;
     }
 }
 
-class Float_ extends Expr {
-    /** @var float */
-    private $value;
+class MagicConst extends Expr {
+    const __LINE__      = '__LINE__';
+    const __FILE__      = '__FILE__';
+    const __DIR__       = '__DIR__';
+    const __FUNCTION__  = '__FUNCTION__';
+    const __CLASS__     = '__CLASS__';
+    const __TRAIT__     = '__TRAIT__';
+    const __METHOD__    = '__METHOD__';
+    const __NAMESPACE__ = '__NAMESPACE__';
 
-    public function __construct(\float $value) {
-        $this->value = $value;
-    }
-}
-
-class String_ extends Expr {
     /** @var string */
+    private $type;
+
+    /**
+     * @param string $type
+     */
+    public function __construct($type) {
+        $this->type = $type;
+    }
+}
+
+class Literal extends Expr {
+    /** @var array|bool|float|int|null|string */
     private $value;
 
-    public function __construct(string $value) {
+    /**
+     * @param string|int|float|bool|null|array $value
+     */
+    public function __construct($value) {
         $this->value = $value;
     }
+}
+
+class Call extends Expr {
+    /** @var CallArg[] */
+    private $args = [];
+
+    /**
+     * @param CallArg[] $args
+     */
+    public function __construct(array $args) {
+        $this->args = $args;
+    }
+}
+
+class FunctionCall extends Call {
+    /** @var Expr */
+    private $function;
+
+    /**
+     * @param CallArg[] $args
+     * @param Expr      $function
+     */
+    public function __construct(array $args, Expr $function) {
+        parent::__construct($args);
+        $this->function = $function;
+    }
+}
+
+class StaticCall extends Call {
+    /** @var Expr */
+    private $class;
+    /** @var Expr */
+    private $method;
+
+    /**
+     * @param CallArg[] $args
+     * @param Expr      $class
+     * @param Expr      $method
+     */
+    public function __construct(array $args, Expr $class, Expr $method) {
+        parent::__construct($args);
+        $this->class  = $class;
+        $this->method = $method;
+    }
+}
+
+class MethodCall extends Call {
+    /** @var Expr */
+    private $object;
+    /** @var Expr */
+    private $method;
+
+    /**
+     * @param CallArg[] $args
+     * @param Expr      $object
+     * @param Expr      $method
+     */
+    public function __construct(array $args, Expr $object, Expr $method) {
+        parent::__construct($args);
+        $this->object = $object;
+        $this->method = $method;
+    }
+}
+
+class CallArg {
+    /** @var Expr */
+    private $expr;
+    private $byRef = false;
+    private $splat = false;
+
+    /**
+     * @param Expr $expr
+     * @param bool $byRef
+     * @param bool $splat
+     */
+    public function __construct(Expr $expr, $byRef, $splat) {
+        $this->expr  = $expr;
+        $this->byRef = $byRef;
+        $this->splat = $splat;
+    }
+}
+
+/**
+ * static::name
+ */
+class Static_ extends Expr {
+}
+
+class Classish extends SingleStmt {
+    const PUBLIC    = 'public';
+    const PROTECTED = 'protected';
+    const PRIVATE   = 'private';
+}
+
+class Trait_ extends Classish {
+}
+
+class Class_ extends Classish {
+    private $methods;
+
+}
+
+class Interface_ extends SingleStmt {
+    private $methods = [];
+}
+
+class Function_ extends SingleStmt {
+    private $name;
+}
+
+class FunctionParam {
+
 }
 

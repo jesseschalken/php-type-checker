@@ -1,0 +1,54 @@
+#!/usr/bin/php
+<?php
+
+namespace JesseSchalken\PhpTypeChecker;
+
+use JesseSchalken\PhpTypeChecker\Node\Parser;
+
+require_once __DIR__ . '/../vendor/autoload.php';
+
+/**
+ * @param string $input
+ * @return string[]
+ */
+function recursive_scan($input):array {
+    if (is_dir($input) && !is_link($input)) {
+        $result = [];
+        foreach (array_diff(scandir($input), ['.', '..']) as $item) {
+            foreach (recursive_scan($input . DIRECTORY_SEPARATOR . $item) as $item2) {
+                $result[] = $item2;
+            }
+        }
+        return $result;
+    } else if (pathinfo($input, PATHINFO_EXTENSION) === 'php') {
+        return [$input];
+    } else {
+        return [];
+    }
+}
+
+function main() {
+    $args = \Docopt::handle(<<<'s'
+Usage:
+    phptc [--include=<file-or-dir>]... <file-or-dir>
+
+s
+    );
+
+    $files = recursive_scan($args['<file-or-dir>']);
+    foreach ($args['--include'] as $include) {
+        $files = array_merge($files, recursive_scan($include));
+    }
+    $files = array_unique($files);
+    sort($files, SORT_STRING);
+    Parser::parseFiles($files);
+}
+
+class Project {
+
+}
+
+ini_set('memory_limit', '1000M');
+
+main();
+

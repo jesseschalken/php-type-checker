@@ -3,7 +3,8 @@
         "nikic/php-parser": "^2.0.0",
         "phpunit/phpunit": "^4.7",
         "zendframework/zendframework": "2.5.2",
-        "jesseschalken/magic-utils": "^0.1.0"
+        "jesseschalken/magic-utils": "^0.1.0",
+        "docopt/docopt": "1.0.2"
     },
     "autoload": {
         "files": ["src/autoload.php"]
