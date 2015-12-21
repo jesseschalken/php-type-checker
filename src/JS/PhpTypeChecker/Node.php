@@ -101,7 +101,7 @@ class Namespace_ {
     /** @var string[] */
     private $useConst = [];
 
-    function __construct(string $prefix) {
+    function __construct(\string $prefix) {
         $this->prefix = $prefix;
     }
 
@@ -206,7 +206,7 @@ class Variable extends LValue {
     /** @var string */
     private $name;
 
-    public function __construct(string $name) {
+    public function __construct(\string $name) {
         $this->name = $name;
     }
 }
@@ -233,7 +233,7 @@ class Float_ extends Expr {
     /** @var float */
     private $value;
 
-    public function __construct(float $value) {
+    public function __construct(\float $value) {
         $this->value = $value;
     }
 }
