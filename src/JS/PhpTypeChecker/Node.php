@@ -36,17 +36,14 @@ class Parser {
         if ($node instanceof Node\Expr) {
             return self::parseExpr($node, $ns);
         } else if ($node instanceof Node\Stmt\If_) {
-            $false = [];
-            if ($node->else) {
-                $false = self::parseStmts($node->else->stmts, $ns);
-            }
+            $false = self::parseStmts($node->else ? $node->else->stmts : [], $ns);
 
             foreach (array_reverse($node->elseifs) as $elseIf) {
-                $false = [new If_(
+                $false = new StmtBlock([new If_(
                     self::parseExpr($elseIf->cond, $ns),
                     self::parseStmts($elseIf->stmts, $ns),
                     $false
-                )];
+                )]);
             }
 
             return new If_(
@@ -150,7 +147,7 @@ final class StmtBlock extends Stmt {
     /**
      * @param SingleStmt[] $stmts
      */
-    public function __construct(array $stmts) {
+    public function __construct(array $stmts = []) {
         $this->stmts = $stmts;
     }
 }
@@ -235,7 +232,7 @@ class Int_ extends Expr {
     /** @var int */
     private $value;
 
-    function __construct(int $value) {
+    function __construct(\int $value) {
         $this->value = $value;
     }
 }
