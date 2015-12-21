@@ -9,7 +9,7 @@ use PhpParser\Parser\Php7;
 class Parser {
     /**
      * @param string $file
-     * @return Stmt[]
+     * @return StmtBlock
      */
     static function parse($file) {
         $parser = new Php7(new Emulative());
@@ -21,17 +21,18 @@ class Parser {
     /**
      * @param Node\Stmt[] $nodes
      * @param Namespace_  $ns
-     * @return Stmt[]
+     * @return StmtBlock
      */
-    private static function parseStmts(array $nodes, Namespace_ $ns) {
+    private static function parseStmts(array $nodes, Namespace_ $ns):StmtBlock {
+        /** @var SingleStmt[] $stmts */
         $stmts = [];
         foreach ($nodes as $node) {
             $stmts[] = self::parseStmt($node, $ns);
         }
-        return $stmts;
+        return new StmtBlock($stmts);
     }
 
-    private static function parseStmt(Node $node, Namespace_ $ns):Stmt {
+    private static function parseStmt(Node $node, Namespace_ $ns):SingleStmt {
         if ($node instanceof Node\Expr) {
             return self::parseExpr($node, $ns);
         } else if ($node instanceof Node\Stmt\If_) {
@@ -142,30 +143,40 @@ class Namespace_ {
 abstract class Stmt {
 }
 
-class If_ extends Stmt {
-    /** @var Expr */
-    private $cond;
-    /** @var Stmt[] */
-    private $true = [];
-    /** @var Stmt[] */
-    private $false = [];
+final class StmtBlock extends Stmt {
+    /** @var SingleStmt[] */
+    private $stmts;
 
     /**
-     * @param Expr   $cond
-     * @param Stmt[] $true
-     * @param stmt[] $false
+     * @param SingleStmt[] $stmts
      */
-    public function __construct(Expr $cond, array $true, array $false) {
+    public function __construct(array $stmts) {
+        $this->stmts = $stmts;
+    }
+}
+
+abstract class SingleStmt extends Stmt {
+}
+
+class If_ extends SingleStmt {
+    /** @var Expr */
+    private $cond;
+    /** @var StmtBlock */
+    private $true;
+    /** @var StmtBlock */
+    private $false;
+
+    public function __construct(Expr $cond, StmtBlock $true, StmtBlock $false) {
         $this->cond  = $cond;
         $this->true  = $true;
         $this->false = $false;
     }
 }
 
-abstract class Expr extends Stmt {
+abstract class Expr extends SingleStmt {
 }
 
-class ConstFetch extends Expr {
+class ConstFetch extends SingleStmt {
     /** @var string */
     private $name;
 
@@ -174,7 +185,7 @@ class ConstFetch extends Expr {
     }
 }
 
-class Return_ extends Stmt {
+class Return_ extends SingleStmt {
     /** @var Expr|null */
     private $expr;
 
