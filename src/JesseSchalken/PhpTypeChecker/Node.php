@@ -105,24 +105,20 @@ class Parser {
         } else if ($node instanceof Node\Expr\Include_) {
             switch ($node->type) {
                 case Node\Expr\Include_::TYPE_INCLUDE:
+                    $require = false;
+                    $once    = false;
+                    break;
                 case Node\Expr\Include_::TYPE_INCLUDE_ONCE:
                     $require = false;
+                    $once    = true;
                     break;
                 case Node\Expr\Include_::TYPE_REQUIRE:
+                    $require = true;
+                    $once    = false;
+                    break;
                 case Node\Expr\Include_::TYPE_REQUIRE_ONCE:
                     $require = true;
-                    break;
-                default:
-                    throw new \Exception("Unknown require type: {$node->type}");
-            }
-            switch ($node->type) {
-                case Node\Expr\Include_::TYPE_INCLUDE:
-                case Node\Expr\Include_::TYPE_REQUIRE:
-                    $once = false;
-                    break;
-                case Node\Expr\Include_::TYPE_INCLUDE_ONCE:
-                case Node\Expr\Include_::TYPE_REQUIRE_ONCE:
-                    $once = true;
+                    $once    = true;
                     break;
                 default:
                     throw new \Exception("Unknown require type: {$node->type}");
