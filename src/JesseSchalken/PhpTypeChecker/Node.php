@@ -527,6 +527,10 @@ class Classish extends SingleStmt {
     const PUBLIC    = 'public';
     const PROTECTED = 'protected';
     const PRIVATE   = 'private';
+
+    private $name;
+
+    function name() { return $this->name; }
 }
 
 class Trait_ extends Classish {
@@ -535,6 +539,16 @@ class Trait_ extends Classish {
 class Class_ extends Classish {
     private $methods;
 
+    function makeAnonymous():Expr {
+        return new If_(
+            new Not_(new FunctionCall(new Literal('class_exists'), [
+                new CallArg(new Literal($this->name()), false, false),
+                new CallArg(new Literal(false), false, false),
+            ])),
+            new StmtBlock([$this]),
+            new StmtBlock()
+        );
+    }
 }
 
 class Interface_ extends SingleStmt {
