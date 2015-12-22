@@ -14,89 +14,169 @@ class Parser {
     static function parseFiles(array $files):array {
         /** @var Node[][] $parsed */
         $parsed = [];
-        $parser = new Php7(new Emulative());
+        $parser = new Php7(new Emulative([
+            'usedAttributes' => [
+                'comments',
+                'startLine',
+                'endLine',
+                'startFilePos',
+                'endFilePos',
+            ],
+        ]));
         foreach ($files as $file) {
             $parsed[$file] = $parser->parse(file_get_contents($file));
         }
         $result = [];
         foreach ($parsed as $file => $nodes) {
-            $result[$file] = self::parseBlock($nodes, new Namespace_(''));
+            $result[$file] = (new self($file))->parseBlock($nodes);
         }
         return $result;
     }
 
+    /** @var string */
+    public $__DIR__ = '';
+    /** @var string */
+    public $__FILE__ = '';
+    /** @var int */
+    // You should use the line number from the parser node
+    // public $__LINE__ = '';
+    /** @var string */
+    public $__FUNCTION__ = '';
+    /** @var string */
+    public $__CLASS__ = '';
+    /** @var string */
+    public $__TRAIT__ = '';
+    /** @var string */
+    public $__METHOD__ = '';
+    /** @var string */
+    public $__NAMESPACE__ = '';
+
+    /** @var string */
+    private $prefix = '';
+    /** @var string[] */
+    private $useFunction = [];
+    /** @var string[] */
+    private $useClass = [];
+    /** @var string[] */
+    private $useConst = [];
+
+    private function __construct($file) {
+        $this->__FILE__ = realpath($file);
+        $this->__DIR__  = dirname($this->__FILE__);
+    }
+
+    private function resolveClass(Node\Name $name):string {
+        return $this->resolve($name, $this->useClass);
+    }
+
+    private function resolveConst(Node\Name $name):string {
+        return $this->resolve($name, $this->useConst);
+    }
+
+    private function resolveFunction(Node\Name $name):string {
+        return $this->resolve($name, $this->useFunction);
+    }
+
+    /**
+     * @param Node\Name $name
+     * @param string[]  $uses
+     * @return string
+     */
+    private function resolve(Node\Name $name, array $uses) {
+        $parts  = $name->parts;
+        $class  = $parts[0];
+        $suffix = count($parts) <= 1 ? '' : '\\' . join('\\', array_slice($parts, 1));
+
+        if ($name->isFullyQualified()) {
+            return $class . $suffix;
+        } else if ($name->isRelative()) {
+            return $this->prefix . $class . $suffix;
+        } else if (isset($uses[$class])) {
+            return $uses[$class] . $suffix;
+        } else {
+            return $this->prefix . $class . $suffix;
+        }
+    }
+
     /**
      * @param Node\Stmt[] $nodes
-     * @param Namespace_  $ns
      * @return StmtBlock
      */
-    private static function parseBlock(array $nodes, Namespace_ $ns):StmtBlock {
+    private function parseBlock(array $nodes):StmtBlock {
         /** @var SingleStmt[] $stmts */
         $stmts = [];
-        self::parseStmts($nodes, $ns, $stmts);
+        $this->parseStmts($nodes, $stmts);
         return new StmtBlock($stmts);
     }
 
     /**
      * @param Node\Stmt[] $nodes
-     * @param Namespace_  $ns
      * @param Stmt[]      $stmts
      * @throws \Exception
      */
-    private static function parseStmts(array $nodes, Namespace_ $ns, array &$stmts) {
+    private function parseStmts(array $nodes, array &$stmts) {
         foreach ($nodes as $node) {
             if ($node instanceof Node\Expr) {
-                $stmts[] = self::parseExpr($node, $ns);
+                $stmts[] = $this->parseExpr($node);
             } else if ($node instanceof Node\Stmt\If_) {
-                $false = self::parseBlock($node->else ? $node->else->stmts : [], $ns);
+                $false = $this->parseBlock($node->else ? $node->else->stmts : []);
 
                 foreach (array_reverse($node->elseifs) as $elseIf) {
                     $false = new StmtBlock([new If_(
-                        self::parseExpr($elseIf->cond, $ns),
-                        self::parseBlock($elseIf->stmts, $ns),
+                        $this->parseExpr($elseIf->cond),
+                        $this->parseBlock($elseIf->stmts),
                         $false
                     )]);
                 }
 
                 $stmts[] = new If_(
-                    self::parseExpr($node->cond, $ns),
-                    self::parseBlock($node->stmts, $ns),
+                    $this->parseExpr($node->cond),
+                    $this->parseBlock($node->stmts),
                     $false
                 );
             } else if ($node instanceof Node\Stmt\Return_) {
                 $expr    = $node->expr;
-                $expr    = $expr ? self::parseExpr($expr, $ns) : null;
+                $expr    = $expr ? $this->parseExpr($expr) : null;
                 $stmts[] = new Return_($expr);
             } else if ($node instanceof Node\Stmt\Namespace_) {
-                self::parseNamespace($node, $stmts);
+                $this->parseNamespace($node, $stmts);
             } else if ($node instanceof Node\Stmt\Class_) {
                 $stmts[] = new Class_();
             } else if ($node instanceof Node\Stmt\Function_) {
+                // TODO
                 $stmts[] = new Function_();
+            } else if ($node instanceof Node\Stmt\Interface_) {
+                // TODO
             } else {
                 throw new \Exception('Unhandled statement type: ' . get_class($node));
             }
         }
     }
 
-    private static function parseNamespace(Node\Stmt\Namespace_ $node, array &$stmts) {
+    private function parseNamespace(Node\Stmt\Namespace_ $node, array &$stmts) {
         $name   = $node->name;
         $name   = $name ? join('\\', $name->parts) . '\\' : '';
         $stmts_ = $node->stmts;
-        $ns     = new Namespace_($name);
+
+        $self              = clone $this;
+        $self->prefix      = $name;
+        $self->useClass    = [];
+        $self->useConst    = [];
+        $self->useFunction = [];
+
         foreach ($stmts_ as $k => $stmt) {
             // TODO handle Use here and remove from $stmts_
         }
 
-        self::parseStmts($stmts_, $ns, $stmts);
+        $self->parseStmts($stmts_, $stmts);
     }
 
-    private static function parseExpr(Node\Expr $node, Namespace_ $ns):Expr {
+    private function parseExpr(Node\Expr $node):Expr {
         if ($node instanceof Node\Expr\ConstFetch) {
-            return new ConstFetch($ns->resolveConst($node->name));
+            return new ConstFetch($this->resolveConst($node->name));
         } else if ($node instanceof Node\Expr\Assign) {
-            $left  = self::parseLValue($node->var, $ns);
-            $right = self::parseExpr($node->expr, $ns);
+            $left  = $this->parseLValue($node->var);
+            $right = $this->parseExpr($node->expr);
             return new Assign($left, $right);
         } else if ($node instanceof Node\Scalar\LNumber) {
             return new Literal($node->value);
@@ -124,49 +204,103 @@ class Parser {
                     throw new \Exception("Unknown require type: {$node->type}");
             }
 
-            return new Include_(self::parseExpr($node->expr, $ns), $require, $once);
+            return new Include_($this->parseExpr($node->expr), $require, $once);
         } else if ($node instanceof Node\Expr\BinaryOp\Concat) {
             return new Concat(
-                self::parseExpr($node->left, $ns),
-                self::parseExpr($node->right, $ns)
+                $this->parseExpr($node->left),
+                $this->parseExpr($node->right)
             );
         } else if ($node instanceof Node\Scalar\MagicConst) {
-            return new MagicConst($node->getName());
+            $type = $node->getName();
+            $line = $node->getAttribute('startLine');
+            return new MagicConst($type, $this->getMagicConstValue($type, $line));
         } else if ($node instanceof Node\Scalar\String_) {
             return new Literal($node->value);
         } else if ($node instanceof Node\Expr\StaticCall) {
             $method = $node->name;
-            $class  = $node->class;
-            if (is_string($method)) {
-                $method = new Literal($method);
+            $method = is_string($method) ? new Literal($method) : $this->parseExpr($method);
+
+            $class = $node->class;
+            $class = $class instanceof Node\Name
+                ? new Literal($this->resolveClass($class))
+                : $this->parseExpr($class);
+
+            return new StaticCall($this->parseArgs($node->args), $class, $method);
+        } else if ($node instanceof Node\Expr\FuncCall) {
+            $function = $node->name;
+            $function = $function instanceof Node\Name
+                ? new Literal($this->resolveFunction($function))
+                : $this->parseExpr($function);
+
+            return new FunctionCall($function, $this->parseArgs($node->args));
+        } else if ($node instanceof Node\Expr\Variable) {
+            $name = $node->name;
+            $name = is_string($name) ? new Literal($name) : $this->parseExpr($name);
+            return new Variable($name);
+        } else if ($node instanceof Node\Expr\Array_) {
+            $items = [];
+            foreach ($node->items as $item) {
+                $key     = $item->key;
+                $value   = $item->value;
+                $byRef   = $item->byRef;
+                $items[] = new ArrayItem(
+                    $key ? $this->parseExpr($key) : null,
+                    $this->parseExpr($value),
+                    $byRef
+                );
             }
-            if ($class instanceof Node\Name) {
-                $class = new Literal($ns->resolveClass($class));
-            }
-            return new StaticCall(self::parseArgs($node->args, $ns), $class, $method);
+            return new Array_($items);
         } else {
             throw new \Exception('Unhandled expression type: ' . get_class($node));
         }
     }
 
     /**
+     * @param string $type
+     * @param int    $line
+     * @return string
+     * @throws \Exception
+     */
+    private function getMagicConstValue($type, $line) {
+        switch ($type) {
+            case MagicConst::__LINE__:
+                return $line;
+            case MagicConst::__FILE__:
+                return $this->__FILE__;
+            case MagicConst::__DIR__:
+                return $this->__DIR__;
+            case MagicConst::__FUNCTION__:
+                return $this->__FUNCTION__;
+            case MagicConst::__CLASS__:
+                return $this->__CLASS__;
+            case MagicConst::__TRAIT__:
+                return $this->__TRAIT__;
+            case MagicConst::__METHOD__:
+                return $this->__METHOD__;
+            case MagicConst::__NAMESPACE__:
+                return $this->__NAMESPACE__;
+            default:
+                throw new \Exception("Invalid magic constant type: $type");
+        }
+    }
+
+    /**
      * @param Node\Arg[] $args
-     * @param Namespace_ $ns
      * @return CallArg[]
      * @throws \Exception
      */
-    private static function parseArgs(array $args, Namespace_ $ns) {
+    private function parseArgs(array $args) {
         $result = [];
         foreach ($args as $arg) {
             $byRef    = $arg->byRef;
             $splat    = $arg->unpack;
-            $expr     = self::parseExpr($arg->value, $ns);
+            $expr     = $this->parseExpr($arg->value);
             $result[] = new CallArg($expr, $byRef, $splat);
         }
         return $result;
     }
 
-    private static function parseLValue(Node\Expr $expr, Namespace_ $ns):LValue {
+    private function parseLValue(Node\Expr $expr):LValue {
         if ($expr instanceof Node\Expr\Variable) {
             $name = $expr->name;
             if (is_string($name)) {
@@ -175,57 +309,6 @@ class Parser {
             return new Variable($name);
         } else {
             throw new \Exception('Unhandled lvalue: ' . get_class($expr));
-        }
-    }
-}
-
-class Namespace_ {
-    /** @var string */
-    private $prefix;
-    /** @var string[] */
-    private $useFunction = [];
-    /** @var string[] */
-    private $useClass = [];
-    /** @var string[] */
-    private $useConst = [];
-
-    /**
-     * @param string $prefix
-     */
-    function __construct($prefix) {
-        $this->prefix = $prefix;
-    }
-
-    function resolveClass(Node\Name $name):string {
-        return $this->resolve($name, $this->useClass);
-    }
-
-    function resolveConst(Node\Name $name):string {
-        return $this->resolve($name, $this->useConst);
-    }
-
-    function resolveFunction(Node\Name $name):string {
-        return $this->resolve($name, $this->useFunction);
-    }
-
-    /**
-     * @param Node\Name $name
-     * @param string[]  $uses
-     * @return string
-     */
-    private function resolve(Node\Name $name, array $uses) {
-        $parts  = $name->parts;
-        $class  = $parts[0];
-        $suffix = count($parts) <= 1 ? '' : '\\' . join('\\', array_slice($parts, 1));
-
-        if ($name->isFullyQualified()) {
-            return $class . $suffix;
-        } else if ($name->isRelative()) {
-            return $this->prefix . $class . $suffix;
-        } else if (isset($uses[$class])) {
-            return $uses[$class] . $suffix;
-        } else {
-            return $this->prefix . $class . $suffix;
         }
     }
 }
@@ -255,12 +338,12 @@ abstract class SingleStmt extends Stmt {
 class If_ extends SingleStmt {
     /** @var Expr */
     private $cond;
-    /** @var StmtBlock */
+    /** @var Stmt */
     private $true;
-    /** @var StmtBlock */
+    /** @var Stmt */
     private $false;
 
-    public function __construct(Expr $cond, StmtBlock $true, StmtBlock $false) {
+    public function __construct(Expr $cond, Stmt $true, Stmt $false) {
         $this->cond  = $cond;
         $this->true  = $true;
         $this->false = $false;
@@ -369,59 +452,12 @@ class MagicConst extends Expr {
     private $value;
 
     /**
-     * @param string $type
-     * @param MagicConstants $magic
-     * @param int $line
+     * @param string     $type
+     * @param int|string $value
      */
-    public function __construct($type, MagicConstants $magic, $line) {
+    public function __construct($type, $value) {
         $this->type  = $type;
-        $this->value = $this->getValue($magic, $line);
-    }
-
-    /**
-     * @param MagicConstants $magic
-     * @param int $line
-     */
-    private function getValue(MagicConstants $magic, $line) {
-        switch ($this->type) {
-            case self::__LINE__: return $line;
-            case self::__FILE__: return $magic->__FILE__;
-            case self::__DIR__: return $magic->__DIR__;
-            case self::__FUNCTION__: return $magic->__FUNCTION__;
-            case self::__CLASS__: return $magic->__CLASS__;
-            case self::__TRAIT__: return $magic->__TRAIT__;
-            case self::__METHOD__: return $magic->__METHOD__;
-            case self::__NAMESPACE__: return $magic->__NAMESPACE__;
-            default: throw new \Exception("Invalid magic constant type: $this->type");
-        }
-    }
-}
-
-class MagicConstants {
-    /** @var string */ 
-    public $__DIR__ = '';
-    /** @var string */ 
-    public $__FILE__ = '';
-    /** @var int */ 
-    // You should use the line number from the parser node
-    // public $__LINE__ = '';
-    /** @var string */ 
-    public $__FUNCTION__ = '';
-    /** @var string */ 
-    public $__CLASS__ = '';
-    /** @var string */ 
-    public $__TRAIT__ = '';
-    /** @var string */ 
-    public $__METHOD__ = '';
-    /** @var string */ 
-    public $__NAMESPACE__ = '';
-
-    /**
-     * @param string $file
-     */
-    public function __construct($file) {
-        $this->__FILE__ = realpath($file);
-        $this->__DIR__  = dirname($this->__FILE__);
+        $this->value = $value;
     }
 }
 
@@ -457,7 +493,7 @@ class FunctionCall extends Call {
      * @param CallArg[] $args
      * @param Expr      $function
      */
-    public function __construct(array $args, Expr $function) {
+    public function __construct(Expr $function, array $args) {
         parent::__construct($args);
         $this->function = $function;
     }
@@ -536,8 +572,16 @@ class Classish extends SingleStmt {
 class Trait_ extends Classish {
 }
 
+class Not_ extends Expr {
+    private $expr;
+
+    function __construct(Expr $expr) {
+        $this->expr = $expr;
+    }
+}
+
 class Class_ extends Classish {
-    private $methods;
+    private $methods = [];
 
     function makeAnonymous():Expr {
         return new If_(
@@ -556,10 +600,89 @@ class Interface_ extends SingleStmt {
 }
 
 class Function_ extends SingleStmt {
+    /** @var string */
     private $name;
+    /** @var bool */
+    private $returnByRef;
+    /** @var FunctionParam[] */
+    private $params = [];
+    /** @var Stmt|null */
+    private $body;
+
+    /**
+     * @param string          $name
+     * @param bool            $returnByRef
+     * @param FunctionParam[] $params
+     * @param Stmt|null       $body
+     */
+    public function __construct($name, $returnByRef, array $params, Stmt $body = null) {
+        $this->name        = $name;
+        $this->returnByRef = $returnByRef;
+        $this->params      = $params;
+        $this->body        = $body;
+    }
+}
+
+class Method_ extends Function_ {
+    /** @var string */
+    private $visibility;
+    /** @var bool */
+    private $isStatic;
 }
 
 class FunctionParam {
+    /** @var string */
+    private $name;
+    /** @var Expr|null */
+    private $default = null;
+    /** @var bool */
+    private $passByRef;
+    /** @var bool */
+    private $variadic;
 
+    /**
+     * @param string    $name
+     * @param Expr|null $default
+     * @param bool      $passByRef
+     * @param bool      $variadic
+     */
+    public function __construct($name, Expr $default = null, $passByRef, $variadic) {
+        $this->name      = $name;
+        $this->default   = $default;
+        $this->passByRef = $passByRef;
+        $this->variadic  = $variadic;
+    }
+}
+
+class Array_ extends Expr {
+    /** @var ArrayItem[] */
+    private $items = [];
+
+    /**
+     * @param ArrayItem[] $items
+     */
+    public function __construct(array $items) {
+        $this->items = $items;
+    }
+}
+
+class ArrayItem {
+    /** @var Expr|null */
+    private $key;
+    /** @var Expr */
+    private $value;
+    /** @var bool */
+    private $byRef;
+
+    /**
+     * @param Expr|null $key
+     * @param Expr      $value
+     * @param bool      $byRef
+     */
+    public function __construct(Expr $key = null, Expr $value, $byRef) {
+        $this->key   = $key;
+        $this->value = $value;
+        $this->byRef = $byRef;
+    }
 }
 
