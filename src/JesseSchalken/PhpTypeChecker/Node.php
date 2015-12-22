@@ -122,11 +122,11 @@ class Parser {
                 $false = $this->parseBlock($node->else ? $node->else->stmts : []);
 
                 foreach (array_reverse($node->elseifs) as $elseIf) {
-                    $false = new StmtBlock([new If_(
+                    $false = new If_(
                         $this->parseExpr($elseIf->cond),
                         $this->parseBlock($elseIf->stmts),
                         $false
-                    )]);
+                    );
                 }
 
                 $stmts[] = new If_(
