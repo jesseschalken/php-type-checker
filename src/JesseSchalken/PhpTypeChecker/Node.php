@@ -369,12 +369,63 @@ class MagicConst extends Expr {
 
     /** @var string */
     private $type;
+    /** @var int|string */
+    private $value;
 
     /**
      * @param string $type
+     * @param MagicConstants $magic
+     * @param int $line
      */
-    public function __construct($type) {
-        $this->type = $type;
+    public function __construct($type, MagicConstants $magic, $line) {
+        $this->type  = $type;
+        $this->value = $this->getValue($magic, $line);
+    }
+
+    /**
+     * @param MagicConstants $magic
+     * @param int $line
+     */
+    private function getValue(MagicConstants $magic, $line) {
+        switch ($this->type) {
+            case self::__LINE__: return $line;
+            case self::__FILE__: return $magic->__FILE__;
+            case self::__DIR__: return $magic->__DIR__;
+            case self::__FUNCTION__: return $magic->__FUNCTION__;
+            case self::__CLASS__: return $magic->__CLASS__;
+            case self::__TRAIT__: return $magic->__TRAIT__;
+            case self::__METHOD__: return $magic->__METHOD__;
+            case self::__NAMESPACE__: return $magic->__NAMESPACE__;
+            default: throw new \Exception("Invalid magic constant type: $this->type");
+        }
+    }
+}
+
+class MagicConstants {
+    /** @var string */ 
+    public $__DIR__ = '';
+    /** @var string */ 
+    public $__FILE__ = '';
+    /** @var int */ 
+    // You should use the line number from the parser node
+    // public $__LINE__ = '';
+    /** @var string */ 
+    public $__FUNCTION__ = '';
+    /** @var string */ 
+    public $__CLASS__ = '';
+    /** @var string */ 
+    public $__TRAIT__ = '';
+    /** @var string */ 
+    public $__METHOD__ = '';
+    /** @var string */ 
+    public $__NAMESPACE__ = '';
+
+    /**
+     * @param string $file
+     */
+    public function __construct($file) {
+        $this->__FILE__ = realpath($file);
+        $this->__DIR__  = dirname($this->__FILE__);
     }
 }
 
