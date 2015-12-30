@@ -251,7 +251,21 @@ class Parser {
 
             return new Continue_($levels);
         } else if ($node instanceof Node\Stmt\Switch_) {
-            // TODO
+            $cases = [];
+            foreach ($node->cases as $case) {
+                $cases[] = new Case_(
+                    $this->parseExprNull($case->cond),
+                    $this->parseStmts($case->stmts)
+                );
+            }
+            return new Switch_(
+                $this->parseExpr($node->cond),
+                $cases
+            );
+        } else if ($node instanceof Node\Stmt\Unset_) {
+            return new Unset_($this->parseExprs($node->vars));
+        } else if ($node instanceof Node\Stmt\While_) {
+            return new While_($this->parseExpr($node->cond), $this->parseStmts($node->stmts));
         } else {
             throw new \Exception('Unhandled statement type: ' . get_class($node));
         }
@@ -263,7 +277,7 @@ class Parser {
      */
     private function parseClassMembers(Node\Stmt\ClassLike $node) {
         foreach ($node->stmts as $stmt) {
-            if ($stmt instanceof Node\Stmt\ClassMethod) {
+            if ($stmt instanceof Node\Stmt\ClassMethod && $stmt->stmts) {
                 $this->parseStmts($stmt->stmts);
             }
         }
@@ -516,7 +530,7 @@ class Parser {
         } else if ($node instanceof Node\Expr\Instanceof_) {
             return new BinOp(
                 $this->parseExpr($node->expr),
-                BinOp::INSTANCEOF,
+                BinOp:: INSTANCEOF,
                 $this->parseExprClass($node->class)
             );
         } else if ($node instanceof Node\Expr\Clone_) {
@@ -531,6 +545,24 @@ class Parser {
                 $this->parseExprClass($node->class),
                 $node->name
             );
+        } else if ($node instanceof Node\Expr\UnaryMinus) {
+            return new UnOp(UnOp::NEGATE, $this->parseExpr($node->expr));
+        } else if ($node instanceof Node\Expr\UnaryPlus) {
+            return new UnOp(UnOp::PLUS, $this->parseExpr($node->expr));
+        } else if ($node instanceof Node\Expr\PostInc) {
+            return new UnOp(UnOp::POST_INC, $this->parseExpr($node->var));
+        } else if ($node instanceof Node\Expr\PreInc) {
+            return new UnOp(UnOp::PRE_INC, $this->parseExpr($node->var));
+        } else if ($node instanceof Node\Expr\PostDec) {
+            return new UnOp(UnOp::POST_DEC, $this->parseExpr($node->var));
+        } else if ($node instanceof Node\Expr\PreDec) {
+            return new UnOp(UnOp::PRE_DEC, $this->parseExpr($node->var));
+        } else if ($node instanceof Node\Expr\List_) {
+            $exprs = [];
+            foreach ($node->vars as $v) {
+                $exprs[] = $this->parseExprNull($v);
+            }
+            return new List_($exprs);
         } else {
             throw new \Exception('Unhandled expression type: ' . get_class($node));
         }
@@ -693,10 +725,11 @@ class Parser {
     private function parseArgs(array $args) {
         $result = [];
         foreach ($args as $arg) {
-            $byRef    = $arg->byRef;
-            $splat    = $arg->unpack;
-            $expr     = $this->parseExpr($arg->value);
-            $result[] = new CallArg($expr, $byRef, $splat);
+            $result[] = new CallArg(
+                $this->parseExpr($arg->value),
+                $arg->byRef,
+                $arg->unpack
+            );
         }
         return $result;
     }
@@ -1573,6 +1606,7 @@ class UnOp extends Expr {
     const BOOL_NOT = '!';
     const BIT_NOT  = '~';
     const NEGATE   = '-';
+    const PLUS     = '+';
     const SUPPRESS = '@';
     const EMPTY    = 'empty';
     const EVAL     = 'eval';
@@ -1731,5 +1765,73 @@ class Yield_ extends Expr {
 }
 
 class Switch_ extends SingleStmt {
+    /** @var Expr */
+    private $expr;
+    /** @var Case_[] */
+    private $cases;
 
+    /**
+     * @param Expr    $expr
+     * @param Case_[] $cases
+     */
+    public function __construct(Expr $expr, array $cases) {
+        $this->expr  = $expr;
+        $this->cases = $cases;
+    }
+}
+
+class Case_ {
+    /** @var Expr|null */
+    private $expr;
+    /** @var Stmt */
+    private $stmt;
+
+    /**
+     * @param Expr|null $expr
+     * @param Stmt      $stmt
+     */
+    public function __construct(Expr $expr = null, Stmt $stmt) {
+        $this->expr = $expr;
+        $this->stmt = $stmt;
+    }
+}
+
+class Unset_ extends SingleStmt {
+    /** @var Expr[] */
+    private $exprs;
+
+    /**
+     * @param Expr[] $exprs
+     */
+    public function __construct(array $exprs) {
+        $this->exprs = $exprs;
+    }
+}
+
+class While_ extends SingleStmt {
+    /** @var Expr */
+    private $cond;
+    /** @var Stmt */
+    private $body;
+
+    /**
+     * @param Expr $cond
+     * @param Stmt $body
+     */
+    public function __construct(Expr $cond, Stmt $body) {
+        $this->cond = $cond;
+        $this->body = $body;
+    }
+}
+
+class List_ extends Expr {
+    /** @var (Expr|null)[] */
+    private $exprs;
+
+    /**
+     * @param (Expr|null)[] $exprs
+     */
+    public function __construct(array $exprs) {
+        $this->exprs = $exprs;
+    }
 }
