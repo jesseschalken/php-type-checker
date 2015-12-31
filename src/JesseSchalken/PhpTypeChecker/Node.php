@@ -2,10 +2,10 @@
 
 namespace JesseSchalken\PhpTypeChecker\Node;
 
-use JesseSchalken\MagicUtils\DeepClone;
 use PhpParser\Lexer;
 use PhpParser\Node;
 use PhpParser\Parser\Php7;
+use function JesseSchalken\MagicUtils\clone_ref;
 
 class Parser {
     /**
@@ -44,8 +44,6 @@ class Parser {
         }
     }
 
-    use DeepClone;
-
     /** @var string */
     public $__DIR__ = '';
     /** @var string */
@@ -75,8 +73,18 @@ class Parser {
     /** @var string[] */
     private $useConst = [];
 
+    /** @var StmtBlock[] */
+    private $finallys = [];
+
+    private $returnRef = false;
+
     private function __construct($file) {
+        $this->finallys[0] = new StmtBlock();
         $this->setFile($file);
+    }
+
+    public function __clone() {
+        clone_ref($this->finallys);
     }
 
     private function resolveClass(Node\Name $name):string {
@@ -117,19 +125,11 @@ class Parser {
      * @return StmtBlock
      */
     private function parseStmts(array $nodes):StmtBlock {
-        /** @var SingleStmt[] $stmts */
-        $stmts = [];
+        $stmts = new StmtBlock();
         foreach ($nodes as $node) {
-            $stmt = $this->parseStmt($node);
-            if ($stmt instanceof SingleStmt) {
-                $stmts[] = $stmt;
-            } else {
-                foreach ($stmt->stmts() as $stmt) {
-                    $stmts[] = $stmt;
-                }
-            }
+            $stmts->add($this->parseStmt($node));
         }
-        return new StmtBlock($stmts);
+        return $stmts;
     }
 
     private function parseStmt(Node $node):Stmt {
@@ -152,36 +152,64 @@ class Parser {
                 $false
             );
         } else if ($node instanceof Node\Stmt\Return_) {
-            return new Return_($this->parseExprNull($node->expr));
+            $expr = $this->parseExprNull($node->expr);
+
+            if ($this->finallys) {
+                $stmts = [];
+                if ($expr) {
+                    $var     = new Variable(new Literal('_' . mt_rand()));
+                    $stmts[] = new BinOp($var, $this->returnRef ? BinOp::ASSIGN_REF : BinOp::ASSIGN, $expr);
+                    $expr    = $var;
+                }
+                return new StmtBlock(array_merge(
+                    $stmts,
+                    $this->finallys,
+                    [new Return_($expr)]
+                ));
+            }
+
+            return new Return_($expr);
         } else if ($node instanceof Node\Stmt\Namespace_) {
-            $copy              = clone $this;
-            $copy->prefix      = $node->name ? $node->name->toString() . '\\' : '';
-            $copy->useClass    = [];
-            $copy->useConst    = [];
-            $copy->useFunction = [];
+            $copy                = clone $this;
+            $copy->__NAMESPACE__ = $node->name ? $node->name->toString() : '';
+            $copy->prefix        = $node->name ? $node->name->toString() . '\\' : '';
+            $copy->useClass      = [];
+            $copy->useConst      = [];
+            $copy->useFunction   = [];
 
             return $copy->parseStmts($node->stmts);
         } else if ($node instanceof Node\Stmt\Class_) {
-            return new Class_(
-                $this->prefix . $node->name,
-                $this->parseClassMembers($node)
-            );
+            $name = $this->prefix . $node->name;
+            $self = clone $this;
+
+            $self->__TRAIT__ = '';
+            $self->__CLASS__ = $name;
+            return new Class_($name, $self->parseClassMembers($node));
         } else if ($node instanceof Node\Stmt\Function_) {
+            $name = $this->prefix . $node->name;
+            $self = clone $this;
+
+            $self->__FUNCTION__ = $name;
+            $self->__METHOD__   = $name;
             return new Function_(
-                $this->prefix . $node->name,
-                $this->parseFunctionType($node),
-                $this->parseStmts($node->stmts)
+                $name,
+                $self->parseFunctionType($node),
+                $self->parseStmts($node->stmts)
             );
         } else if ($node instanceof Node\Stmt\Interface_) {
-            return new Interface_(
-                $this->prefix . $node->name,
-                $this->parseClassMembers($node)
-            );
+            $name = $this->prefix . $node->name;
+            $self = clone $this;
+
+            $self->__TRAIT__ = '';
+            $self->__CLASS__ = $name;
+            return new Interface_($name, $self->parseClassMembers($node));
         } else if ($node instanceof Node\Stmt\Trait_) {
-            return new Trait_(
-                $this->prefix . $node->name,
-                $this->parseClassMembers($node)
-            );
+            $name = $this->prefix . $node->name;
+            $self = clone $this;
+
+            $self->__TRAIT__ = $name;
+            $self->__CLASS__ = $name;
+            return new Trait_($name, $self->parseClassMembers($node));
         } else if ($node instanceof Node\Stmt\Use_) {
             $this->addUses($node->uses, $node->type);
             return new StmtBlock();
@@ -216,10 +244,10 @@ class Parser {
             return new Throw_($this->parseExpr($node->expr));
         } else if ($node instanceof Node\Stmt\Static_) {
             $stmts = [];
-            foreach ($node->vars as $var) {
+            foreach ($node->vars as $finallyVar) {
                 $stmts[] = new StaticVar(
-                    $var->name,
-                    $this->parseExprNull($var->default)
+                    $finallyVar->name,
+                    $this->parseExprNull($finallyVar->default)
                 );
             }
             return new StmtBlock($stmts);
@@ -239,7 +267,10 @@ class Parser {
                 throw new \Exception('"break" statement must use a constant operand');
             }
 
-            return new Break_($levels);
+            return new StmtBlock(array_merge(
+                array_slice($this->finallys, 0, $levels),
+                [new Break_($levels)]
+            ));
         } else if ($node instanceof Node\Stmt\Continue_) {
             if ($node->num === null) {
                 $levels = 1;
@@ -249,7 +280,10 @@ class Parser {
                 throw new \Exception('"continue" statement must use a constant operand');
             }
 
-            return new Continue_($levels);
+            return new StmtBlock(array_merge(
+                array_slice($this->finallys, 0, $levels),
+                [new Continue_($levels)]
+            ));
         } else if ($node instanceof Node\Stmt\Switch_) {
             $cases = [];
             foreach ($node->cases as $case) {
@@ -266,6 +300,52 @@ class Parser {
             return new Unset_($this->parseExprs($node->vars));
         } else if ($node instanceof Node\Stmt\While_) {
             return new While_($this->parseExpr($node->cond), $this->parseStmts($node->stmts));
+        } else if ($node instanceof Node\Stmt\TryCatch) {
+            if ($node->finallyStmts) {
+                $finally      = $this->parseStmts($node->finallyStmts);
+                $finallyVar   = new Variable(new Literal('_' . mt_rand()));
+                $exceptionVar = new Variable(new Literal('_' . mt_rand()));
+
+                $self = clone $this;
+                $self->finallys[0]->add(new StmtBlock(array_merge(
+                    [new BinOp($finallyVar, BinOp::ASSIGN, new Literal(true))],
+                    $finally->stmts()
+                )));
+
+                return new StmtBlock([
+                    new BinOp($finallyVar, BinOp::ASSIGN, new Literal(false)),
+                    new Try_($self->parseTryCatch($node), [
+                        new Catch_('Exception', $exceptionVar, new StmtBlock()),
+                    ]),
+                    new If_(
+                        new UnOp(UnOp::BOOL_NOT, $finallyVar),
+                        $finally,
+                        new StmtBlock()
+                    ),
+                    new If_(
+                        new Isset_([$exceptionVar]),
+                        new Throw_($exceptionVar),
+                        new StmtBlock()
+                    ),
+                ]);
+            } else {
+                return $this->parseTryCatch($node);
+            }
+        } else if ($node instanceof Node\Stmt\Do_) {
+            return new DoWhile(
+                $this->parseStmts($node->stmts),
+                $this->parseExpr($node->cond)
+            );
+        } else if ($node instanceof Node\Stmt\Global_) {
+            $stmts = new StmtBlock();
+            foreach ($node->vars as $var) {
+                $stmts->add(new Global_($this->parseExpr($var)));
+            }
+            return $stmts;
+        } else if ($node instanceof Node\Stmt\Label) {
+            return new Label_($node->name);
+        } else if ($node instanceof Node\Stmt\Goto_) {
+            return new Goto_($node->name);
         } else {
             throw new \Exception('Unhandled statement type: ' . get_class($node));
         }
@@ -563,6 +643,20 @@ class Parser {
                 $exprs[] = $this->parseExprNull($v);
             }
             return new List_($exprs);
+        } else if ($node instanceof Node\Expr\AssignRef) {
+            return new BinOp(
+                $this->parseExpr($node->var),
+                BinOp::ASSIGN_REF,
+                $this->parseExpr($node->expr)
+            );
+        } else if ($node instanceof Node\Expr\BitwiseNot) {
+            return new UnOp(UnOp::BIT_NOT, $this->parseExpr($node->expr));
+        } else if ($node instanceof Node\Expr\ShellExec) {
+            $exprs = [];
+            foreach ($node->parts as $part) {
+                $exprs[] = $this->parseExpr($part);
+            }
+            return new ShellExec($exprs);
         } else {
             throw new \Exception('Unhandled expression type: ' . get_class($node));
         }
@@ -741,6 +835,28 @@ class Parser {
         $this->__FILE__ = realpath($file);
         $this->__DIR__  = dirname($this->__FILE__);
     }
+
+    /**
+     * @param Node\Stmt\TryCatch $node
+     * @return Stmt
+     */
+    private function parseTryCatch(Node\Stmt\TryCatch $node):Stmt {
+        $result = $this->parseStmts($node->stmts);
+
+        if ($node->catches) {
+            $catches = [];
+            foreach ($node->catches as $catch) {
+                $catches[] = new Catch_(
+                    $this->resolveClass($catch->type),
+                    $catch->var,
+                    $this->parseStmts($catch->stmts)
+                );
+            }
+            $result = new Try_($result, $catches);
+        }
+
+        return $result;
+    }
 }
 
 abstract class Stmt {
@@ -751,24 +867,50 @@ abstract class Stmt {
 }
 
 final class StmtBlock extends Stmt {
-    /** @var SingleStmt[] */
+    /** @var Stmt[] */
     private $stmts;
 
     /**
-     * @param SingleStmt[] $stmts
+     * @param Stmt[] $stmts
      */
     public function __construct(array $stmts = []) {
         $this->stmts = $stmts;
     }
 
     public function stmts():array {
-        return $this->stmts;
+        $result = [];
+        foreach ($this->stmts as $stmt) {
+            foreach ($stmt->stmts() as $stmt_) {
+                $result[] = $stmt_;
+            }
+        }
+        return $result;
+    }
+
+    public function add(Stmt $stmt) {
+        $this->stmts[] = $stmt;
     }
 }
 
 abstract class SingleStmt extends Stmt {
     final function stmts():array {
         return [$this];
+    }
+}
+
+class DoWhile extends SingleStmt {
+    /** @var Stmt */
+    private $body;
+    /** @var Expr */
+    private $cond;
+
+    /**
+     * @param Stmt $body
+     * @param Expr $cond
+     */
+    public function __construct(Stmt $body, Expr $cond) {
+        $this->body = $body;
+        $this->cond = $cond;
     }
 }
 
@@ -824,21 +966,6 @@ class Return_ extends SingleStmt {
 
     public function __construct(Expr $expr = null) {
         $this->expr = $expr;
-    }
-}
-
-class Assign extends Expr {
-    /** @var bool */
-    private $byRef = false;
-    /** @var Expr */
-    private $left;
-    /** @var Expr */
-    private $right;
-
-    public function __construct(Expr $left, Expr $right, bool $byRef = false) {
-        $this->left  = $left;
-        $this->right = $right;
-        $this->byRef = $byRef;
     }
 }
 
@@ -1761,7 +1888,6 @@ class Yield_ extends Expr {
         $this->key   = $key;
         $this->value = $value;
     }
-
 }
 
 class Switch_ extends SingleStmt {
@@ -1833,5 +1959,89 @@ class List_ extends Expr {
      */
     public function __construct(array $exprs) {
         $this->exprs = $exprs;
+    }
+}
+
+class Try_ extends SingleStmt {
+    /** @var Stmt */
+    private $body;
+    /** @var Catch_[] */
+    private $catches;
+
+    /**
+     * @param Stmt     $body
+     * @param Catch_[] $catches
+     */
+    public function __construct(Stmt $body, array $catches) {
+        $this->body    = $body;
+        $this->catches = $catches;
+    }
+}
+
+class Catch_ extends SingleStmt {
+    /** @var string */
+    private $class;
+    /** @var string */
+    private $variable;
+    /** @var Stmt */
+    private $body;
+
+    /**
+     * @param string $class
+     * @param string $variable
+     * @param Stmt   $body
+     */
+    public function __construct($class, $variable, Stmt $body) {
+        $this->class    = $class;
+        $this->variable = $variable;
+        $this->body     = $body;
+    }
+}
+
+class Global_ extends SingleStmt {
+    /** @var Expr */
+    private $expr;
+
+    /**
+     * @param Expr $expr
+     */
+    public function __construct(Expr $expr) {
+        $this->expr = $expr;
+    }
+}
+
+class Label_ extends SingleStmt {
+    /** @var string */
+    private $name;
+
+    /**
+     * @param string $name
+     */
+    public function __construct($name) {
+        $this->name = $name;
+    }
+}
+
+class Goto_ extends SingleStmt {
+    /** @var string */
+    private $name;
+
+    /**
+     * @param string $name
+     */
+    public function __construct($name) {
+        $this->name = $name;
+    }
+}
+
+class ShellExec extends Expr {
+    /** @var Expr[] */
+    private $parts;
+
+    /**
+     * @param Expr[] $parts
+     */
+    public function __construct(array $parts) {
+        $this->parts = $parts;
     }
 }
