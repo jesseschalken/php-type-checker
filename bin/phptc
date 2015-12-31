@@ -27,21 +27,34 @@ function recursive_scan($input):array {
     }
 }
 
+/**
+ * @param string $input
+ * @return string[]
+ */
+function recursive_scan2($input):array {
+    if (is_dir($input) && !is_link($input)) {
+        return recursive_scan($input);
+    } else {
+        return [$input];
+    }
+}
+
 function main() {
     $args = \Docopt::handle(<<<'s'
 Usage:
-    phptc [--include=<file-or-dir>]... <file-or-dir>
+    phptc [--include=DIR]... IN_DIR [OUT_DIR]
 
 s
     );
 
-    $files = recursive_scan($args['<file-or-dir>']);
+    $input = $args['IN_DIR'];
+    $files = recursive_scan2($input);
     foreach ($args['--include'] as $include) {
-        $files = array_merge($files, recursive_scan($include));
+        $files = array_merge($files, recursive_scan2($include));
     }
     $files = array_unique($files);
     sort($files, SORT_STRING);
-    Parser::parseFiles($files);
+    $files = Parser::parseFiles($files);
 }
 
 class Project {

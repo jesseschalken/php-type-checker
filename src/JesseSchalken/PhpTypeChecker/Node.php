@@ -2,25 +2,215 @@
 
 namespace JesseSchalken\PhpTypeChecker\Node;
 
+use JesseSchalken\MagicUtils\DeepClone;
 use PhpParser\Lexer;
 use PhpParser\Node;
 use PhpParser\Parser\Php7;
 use function JesseSchalken\MagicUtils\clone_ref;
+use function JesseSchalken\PhpTypeChecker\recursive_scan2;
 
-class Parser {
+class CodeLocation {
+    /** @var string */
+    private $path;
+    /** @var int */
+    private $line;
+    /** @var int */
+    private $column;
+
     /**
-     * @param string[] $files
-     * @return StmtBlock[]
+     * @param string $path
+     * @param int    $line
+     * @param int    $column
      */
-    static function parseFiles(array $files):array {
-        $result = [];
-        foreach (self::parseFilesNodes($files) as $file => $nodes) {
-            $result[$file] = (new self($file))->parseStmts($nodes);
-        }
-        return $result;
+    public function __construct($path, $line, $column) {
+        $this->path   = $path;
+        $this->line   = $line;
+        $this->column = $column;
     }
 
-    private static function parseFilesNodes(array $files) {
+    /**
+     * @param string $message
+     * @return string
+     */
+    function format($message) {
+        return "$this->path($this->line,$this->column): $message\n";
+    }
+}
+
+class ErrorReceiver {
+    function add($message, CodeLocation $location) {
+        print $location->format($message);
+    }
+}
+
+abstract class DefinedNames {
+    private $names = [];
+
+    /**
+     * @param string[] $names
+     */
+    public function __construct($names = []) {
+        foreach ($names as $name) {
+            $this->add($name);
+        }
+    }
+
+    /**
+     * @param string $name
+     * @return bool
+     */
+    public final function has($name) {
+        return isset($this->names[$this->normalize($name)]);
+    }
+
+    /**
+     * @param string $name
+     */
+    public final function add($name) {
+        $this->names[$this->normalize($name)] = true;
+    }
+
+    /**
+     * @param string $name
+     * @return string
+     */
+    abstract protected function normalize($name);
+
+    /**
+     * @param string $prefix
+     * @return string
+     */
+    public final function create($prefix) {
+        for ($i = 0; $name = $prefix . $i, $this->has($name); $i++) {
+        }
+
+        $this->add($name);
+        return $name;
+    }
+}
+
+class DefinedNamesConstants extends DefinedNames {
+    protected function normalize($name) {
+        // $name is the name of the constant including the namespace.
+        // Namespaces are case insensitive, but constants are case sensitive,
+        // therefire split the name on the last "\" and strtolower() the left side.
+        $pos = strrpos($name, '\\');
+        $pos = $pos === false ? 0 : $pos + 1;
+
+        $prefix   = substr($name, $pos);
+        $constant = substr($name, 0, $pos);
+
+        return strtolower($prefix) . $constant;
+    }
+}
+
+class DefinedNamesCaseInsensitive extends DefinedNames {
+    protected function normalize($name) {
+        return strtolower($name);
+    }
+}
+
+class DefinedNamesCaseSensitive extends DefinedNames {
+    protected function normalize($name) {
+        return $name;
+    }
+}
+
+/**
+ * @param Node $node
+ * @return Node[]
+ */
+function node_sub_nodes(Node $node):array {
+    $result = [];
+    foreach ($node->getSubNodeNames() as $prop) {
+        $value = $node->$prop;
+        if (is_array($value)) {
+            foreach ($value as $value2) {
+                if ($value2 instanceof Node) {
+                    $result[] = $value2;
+                }
+            }
+        } else if ($value instanceof Node) {
+            $result[] = $value;
+        }
+    }
+    return $result;
+}
+
+class GlobalDefinedNames {
+    use DeepClone;
+
+    /** @var DefinedNames */
+    public $classes;
+    /** @var DefinedNames */
+    public $constants;
+    /** @var DefinedNames */
+    public $functions;
+
+    public function __construct() {
+        $this->classes   = new DefinedNamesCaseInsensitive;
+        $this->constants = new DefinedNamesConstants;
+        $this->functions = new DefinedNamesCaseInsensitive;
+    }
+
+    /**
+     * @param Node[] $nodes
+     * @param string $prefix
+     */
+    public function addNodes(array $nodes, $prefix = '') {
+        foreach ($nodes as $node) {
+            $this->addNode($node, $prefix);
+        }
+    }
+
+    /**
+     * @param Node   $node
+     * @param string $prefix
+     * @return void
+     */
+    public function addNode(Node $node, $prefix = '') {
+        if ($node instanceof Node\Stmt\Function_) {
+            $this->functions->add($prefix . $node->name);
+        } else if ($node instanceof Node\Stmt\ClassLike) {
+            $this->classes->add($prefix . $node->name);
+        } else if ($node instanceof Node\Stmt\Const_) {
+            foreach ($node->consts as $const) {
+                $this->constants->add($prefix . $const->name);
+            }
+        } else if ($node instanceof Node\Stmt\Namespace_) {
+            $prefix = $node->name ? $node->name->toString() . '\\' : '';
+        }
+
+        $this->addNodes(node_sub_nodes($node), $prefix);
+    }
+}
+
+class ParsedFile {
+    /** @var string */
+    public $path;
+    /** @var string */
+    public $contents = '';
+    /** @var Node[] */
+    public $nodes = [];
+    /** @var string */
+    public $shebang = '';
+    /** @var int */
+    public $lineOffset = 0;
+
+    /**
+     * @param string        $path
+     * @param ErrorReceiver $errors
+     */
+    public function __construct($path, ErrorReceiver $errors) {
+        $this->path     = $path;
+        $this->contents = file_get_contents($path);
+        if (substr($this->contents, 0, 2) == "#!") {
+            $pos              = strpos($this->contents, "\n") + 1;
+            $this->shebang    = substr($this->contents, 0, $pos);
+            $this->contents   = substr($this->contents, $pos);
+            $this->lineOffset = 1;
+        }
+
         $parser = new Php7(
             new Lexer([
                 'usedAttributes' => [
@@ -36,18 +226,80 @@ class Parser {
             ]
         );
 
-        foreach ($files as $file) {
-            yield $file => $parser->parse(file_get_contents($file));
-            foreach ($parser->getErrors() as $error) {
-                print "$file {$error->getMessage()}\n";
-            }
+        $this->nodes = $parser->parse($this->contents);
+
+        foreach ($parser->getErrors() as $error) {
+            $errors->add($error->getRawMessage(), $this->locateError($error));
         }
     }
 
+    public function locateError(\PhpParser\Error $error):CodeLocation {
+        $line = $this->lineOffset + $error->getStartLine();
+        $col  = $this->offsetToColumn($error->hasColumnInfo() ? $error->getAttributes()['startFilePos'] : null);
+        return new CodeLocation($this->path, $line, $col);
+    }
+
+    public function locateNode(Node $node):CodeLocation {
+        $line = $this->lineOffset + $node->getLine();
+        $col  = $this->offsetToColumn($node->getAttribute('startFilePos'));
+        return new CodeLocation($this->path, $line, $col);
+    }
+
+    /**
+     * @param int|null $offset
+     * @return int
+     */
+    public function offsetToColumn($offset = null) {
+        if ($offset === null) {
+            return 1;
+        } else {
+            $code      = $this->contents;
+            $lineStart = strrpos($code, "\n", $offset - strlen($code));
+            $lineStart = $lineStart === false ? 0 : $lineStart + 1;
+
+            return $offset - $lineStart + 1;
+        }
+    }
+}
+
+class File {
+    /**
+     * @param string[]      $paths
+     * @param ErrorReceiver $errors
+     * @return File[]
+     */
+    static function parseFiles(array $paths, ErrorReceiver $errors):array {
+        /**
+         * @var ParsedFile[] $parsed
+         * @var self[]       $result
+         */
+        $parsed  = [];
+        $defined = new GlobalDefinedNames;
+        $result  = [];
+        foreach ($paths as $path) {
+            $file = new ParsedFile($path, $errors);
+            $defined->addNodes($file->nodes);
+            $parsed[] = $file;
+        }
+        foreach ($parsed as $file) {
+            $self           = new self();
+            $self->contents = (new Parser($file, $defined))->parseStmts($file->nodes);
+            $self->path     = $file->path;
+            $self->shebang  = $file->shebang;
+            $result[]       = $self;
+        }
+        return $result;
+    }
+
     /** @var string */
-    public $__DIR__ = '';
+    private $path;
     /** @var string */
-    public $__FILE__ = '';
+    private $shebang = '';
+    /** @var Stmt */
+    private $contents;
+}
+
+class Parser {
     /**
      * @deprecated You should use the line number from the parser node
      * @var int
@@ -61,26 +313,38 @@ class Parser {
     public $__TRAIT__ = '';
     /** @var string */
     public $__METHOD__ = '';
-    /** @var string */
-    public $__NAMESPACE__ = '';
 
-    /** @var string */
-    private $prefix = '';
-    /** @var string[] */
+    /** @var Node\Name */
+    private $namespace;
+    /** @var Node\Name[] */
     private $useFunction = [];
-    /** @var string[] */
+    /** @var Node\Name[] This is used for all four of classes, interfaces, traits and namespaces */
     private $useClass = [];
-    /** @var string[] */
-    private $useConst = [];
+    /** @var Node\Name[] */
+    private $useConstant = [];
 
     /** @var StmtBlock[] */
     private $finallys = [];
 
     private $returnRef = false;
 
-    private function __construct($file) {
+    /** @var GlobalDefinedNames */
+    private $globals;
+    /** @var DefinedNames */
+    private $locals;
+    /** @var ParsedFile */
+    private $file;
+
+    /**
+     * @param ParsedFile         $file
+     * @param GlobalDefinedNames $globals
+     */
+    public function __construct($file, GlobalDefinedNames $globals) {
+        $this->namespace   = new Node\Name('');
+        $this->globals     = $globals;
+        $this->locals      = new DefinedNamesCaseSensitive();
         $this->finallys[0] = new StmtBlock();
-        $this->setFile($file);
+        $this->file        = $file;
     }
 
     public function __clone() {
@@ -92,44 +356,70 @@ class Parser {
     }
 
     private function resolveConst(Node\Name $name):string {
-        return $this->resolve($name, $this->useConst);
+        return $this->resolve($name, $this->useConstant, $this->globals->constants);
     }
 
     private function resolveFunction(Node\Name $name):string {
-        return $this->resolve($name, $this->useFunction);
+        return $this->resolve($name, $this->useFunction, $this->globals->functions);
     }
 
     /**
-     * @param Node\Name $name
-     * @param string[]  $uses
+     * TODO use a special object for the $use which knows which knows that constants are case sensitive
+     * @param Node\Name    $name
+     * @param Node\Name[]  $uses
+     * @param DefinedNames $defined
      * @return string
      */
-    private function resolve(Node\Name $name, array $uses) {
-        $parts  = $name->parts;
-        $class  = $parts[0];
-        $suffix = count($parts) <= 1 ? '' : '\\' . join('\\', array_slice($parts, 1));
-
+    private function resolve(Node\Name $name, array $uses, DefinedNames $defined = null) {
         if ($name->isFullyQualified()) {
-            return $class . $suffix;
+            // Fully qualified names bypass use statements
         } else if ($name->isRelative()) {
-            return $this->prefix . $class . $suffix;
-        } else if (isset($uses[$class])) {
-            return $uses[$class] . $suffix;
+            // Namespace-qualified names bypass use statements
+            $name = Node\Name::concat($this->namespace, $name);
         } else {
-            return $this->prefix . $class . $suffix;
+            // Grab the first part to look it up in the use statements
+            $first = $name->getFirst();
+            if ($name->isQualified()) {
+                // If the name has multiple parts, the first needs to be looked up in the class use statements
+                if (isset($this->useClass[$first])) {
+                    $name = Node\Name::concat($this->useClass[$first], $name->slice(1));
+                } else {
+                    $name = Node\Name::concat($this->namespace, $name);
+                }
+            } else {
+                // If the name has only one part, then it needs to be looked up in the use statements for the type of
+                // name (function, constant, class/trait/interface)
+                if (isset($uses[$first])) {
+                    $name = $uses[$first];
+                } else {
+                    $name = Node\Name::concat($this->namespace, $name);
+                    // !!! Special case for constants and functions
+                    // A plain unqualified name like "array_slice" or "STR_PAD_LEFT" will revert to the top namespace
+                    // if it doesn't exist in the current namespace.
+                    if ($defined && !$defined->has($name->toString())) {
+                        $name = new Node\Name($first);
+                    }
+                }
+            }
         }
+
+        return $name->toString();
     }
 
     /**
      * @param Node\Stmt[] $nodes
      * @return StmtBlock
      */
-    private function parseStmts(array $nodes):StmtBlock {
+    public function parseStmts(array $nodes):StmtBlock {
         $stmts = new StmtBlock();
         foreach ($nodes as $node) {
             $stmts->add($this->parseStmt($node));
         }
         return $stmts;
+    }
+
+    private function newUnusedvariable():Variable {
+        return new Variable(new Literal($this->locals->create('_')));
     }
 
     private function parseStmt(Node $node):Stmt {
@@ -157,7 +447,7 @@ class Parser {
             if ($this->finallys) {
                 $stmts = [];
                 if ($expr) {
-                    $var     = new Variable(new Literal('_' . mt_rand()));
+                    $var     = $this->newUnusedvariable();
                     $stmts[] = new BinOp($var, $this->returnRef ? BinOp::ASSIGN_REF : BinOp::ASSIGN, $expr);
                     $expr    = $var;
                 }
@@ -170,23 +460,22 @@ class Parser {
 
             return new Return_($expr);
         } else if ($node instanceof Node\Stmt\Namespace_) {
-            $copy                = clone $this;
-            $copy->__NAMESPACE__ = $node->name ? $node->name->toString() : '';
-            $copy->prefix        = $node->name ? $node->name->toString() . '\\' : '';
-            $copy->useClass      = [];
-            $copy->useConst      = [];
-            $copy->useFunction   = [];
+            $copy              = clone $this;
+            $copy->namespace   = $node->name ?: new Node\Name('');
+            $copy->useClass    = [];
+            $copy->useConstant = [];
+            $copy->useFunction = [];
 
             return $copy->parseStmts($node->stmts);
         } else if ($node instanceof Node\Stmt\Class_) {
-            $name = $this->prefix . $node->name;
+            $name = $this->prefixName($node->name);
             $self = clone $this;
 
             $self->__TRAIT__ = '';
             $self->__CLASS__ = $name;
             return new Class_($name, $self->parseClassMembers($node));
         } else if ($node instanceof Node\Stmt\Function_) {
-            $name = $this->prefix . $node->name;
+            $name = $this->prefixName($node->name);
             $self = clone $this;
 
             $self->__FUNCTION__ = $name;
@@ -197,14 +486,14 @@ class Parser {
                 $self->parseStmts($node->stmts)
             );
         } else if ($node instanceof Node\Stmt\Interface_) {
-            $name = $this->prefix . $node->name;
+            $name = $this->prefixName($node->name);
             $self = clone $this;
 
             $self->__TRAIT__ = '';
             $self->__CLASS__ = $name;
             return new Interface_($name, $self->parseClassMembers($node));
         } else if ($node instanceof Node\Stmt\Trait_) {
-            $name = $this->prefix . $node->name;
+            $name = $this->prefixName($node->name);
             $self = clone $this;
 
             $self->__TRAIT__ = $name;
@@ -214,10 +503,7 @@ class Parser {
             $this->addUses($node->uses, $node->type);
             return new StmtBlock();
         } else if ($node instanceof Node\Stmt\GroupUse) {
-            $prefix = $node->prefix->toString() . '\\';
-            if ($prefix === '\\')
-                $prefix = '';
-            $this->addUses($node->uses, $node->type, $prefix);
+            $this->addUses($node->uses, $node->type, $node->prefix);
             return new StmtBlock();
         } else if ($node instanceof Node\Stmt\Foreach_) {
             return new Foreach_(
@@ -235,7 +521,7 @@ class Parser {
             $stmts = [];
             foreach ($node->consts as $const) {
                 $stmts[] = new Const_(
-                    $this->prefix . $const->name,
+                    $this->prefixName($const->name),
                     $this->parseExpr($const->value)
                 );
             }
@@ -303,14 +589,14 @@ class Parser {
         } else if ($node instanceof Node\Stmt\TryCatch) {
             if ($node->finallyStmts) {
                 $finally      = $this->parseStmts($node->finallyStmts);
-                $finallyVar   = new Variable(new Literal('_' . mt_rand()));
-                $exceptionVar = new Variable(new Literal('_' . mt_rand()));
+                $finallyVar   = $this->newUnusedvariable();
+                $exceptionVar = $this->newUnusedvariable();
 
                 $self = clone $this;
-                $self->finallys[0]->add(new StmtBlock(array_merge(
-                    [new BinOp($finallyVar, BinOp::ASSIGN, new Literal(true))],
-                    $finally->stmts()
-                )));
+                $self->finallys[0]->add(new StmtBlock([
+                    new BinOp($finallyVar, BinOp::ASSIGN, new Literal(true)),
+                    $finally,
+                ]));
 
                 return new StmtBlock([
                     new BinOp($finallyVar, BinOp::ASSIGN, new Literal(false)),
@@ -352,6 +638,14 @@ class Parser {
     }
 
     /**
+     * @param string $name
+     * @return string
+     */
+    private function prefixName($name) {
+        return Node\Name::concat($this->namespace, $name)->toString();
+    }
+
+    /**
      * @param Node\Stmt\ClassLike $node
      * @return ClassMember[]
      */
@@ -375,17 +669,17 @@ class Parser {
     /**
      * @param Node\Stmt\UseUse[] $uses
      * @param int                $type_
-     * @param string             $prefix
+     * @param Node\Name|null     $prefix
      * @throws \Exception
      */
-    private function addUses(array $uses, $type_, $prefix = '') {
+    private function addUses(array $uses, $type_, $prefix = null) {
         foreach ($uses as $use) {
-            $name  = $prefix . $use->name->toString();
+            $name  = $prefix ? Node\Name::concat($prefix, $use->name) : $use->name;
             $alias = $use->alias === null ? $use->name->getLast() : $use->alias;
             $type  = $use->type === Node\Stmt\Use_::TYPE_UNKNOWN ? $type_ : $use->type;
             switch ($type) {
                 case Node\Stmt\Use_::TYPE_CONSTANT:
-                    $this->useConst[$alias] = $name;
+                    $this->useConstant[$alias] = $name;
                     break;
                 case Node\Stmt\Use_::TYPE_FUNCTION:
                     $this->useFunction[$alias] = $name;
@@ -442,7 +736,17 @@ class Parser {
         if ($node instanceof Node\Expr\Variable) {
             return new Variable($this->parseExprString($node->name));
         } else if ($node instanceof Node\Expr\ConstFetch) {
-            return new ConstFetch($this->resolveConst($node->name));
+            $name = $this->resolveConst($node->name);
+            switch (strtolower($name)) {
+                case 'true':
+                    return new Literal(true);
+                case 'false':
+                    return new Literal(false);
+                case 'null':
+                    return new Literal(null);
+                default:
+                    return new ConstFetch($name);
+            }
         } else if ($node instanceof Node\Expr\Assign) {
             return new BinOp(
                 $this->parseExpr($node->var),
@@ -528,7 +832,7 @@ class Parser {
             $class = $node->class;
             if ($class instanceof Node\Stmt\Class_) {
                 $class   = new Class_(
-                    $this->prefix . 'class' . mt_rand(),
+                    $this->globals->classes->create($this->prefixName('class')),
                     $this->parseClassMembers($class)
                 );
                 $stmts[] = $class;
@@ -793,9 +1097,9 @@ class Parser {
             case MagicConst::LINE:
                 return $line;
             case MagicConst::FILE:
-                return $this->__FILE__;
+                return realpath($this->file->path);
             case MagicConst::DIR:
-                return $this->__DIR__;
+                return dirname(realpath($this->file->path));
             case MagicConst::FUNCTION:
                 return $this->__FUNCTION__;
             case MagicConst::CLASS_:
@@ -805,7 +1109,7 @@ class Parser {
             case MagicConst::METHOD:
                 return $this->__METHOD__;
             case MagicConst::NAMESPACE:
-                return $this->__NAMESPACE__;
+                return $this->namespace->toString();
             default:
                 throw new \Exception("Invalid magic constant type: $type");
         }
@@ -826,14 +1130,6 @@ class Parser {
             );
         }
         return $result;
-    }
-
-    /**
-     * @param string $file
-     */
-    private function setFile($file) {
-        $this->__FILE__ = realpath($file);
-        $this->__DIR__  = dirname($this->__FILE__);
     }
 
     /**
