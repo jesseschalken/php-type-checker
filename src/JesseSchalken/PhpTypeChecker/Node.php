@@ -405,6 +405,7 @@ class File {
 }
 
 class Parser {
+
     /** @var Node\Name */
     private $namespace;
     /** @var Uses */
@@ -413,18 +414,26 @@ class Parser {
     private $useClass;
     /** @var Uses */
     private $useConstant;
+
     /** @var StmtBlock[] */
     private $finallys = [];
+
     /** @var bool */
     private $returnRef = false;
+
     /** @var GlobalDefinedNames */
     private $globals;
+
     /** @var DefinedNames */
     private $locals;
+
     /** @var ParsedFile */
     private $file;
+
     /** @var string|null */
     private $class;
+    /** @var string|null */
+    private $trait;
     /** @var string|null */
     private $parent;
     /** @var string|null */
@@ -449,8 +458,22 @@ class Parser {
         $this->useConstant = new ConstantUses($this->namespace, $this->globals->classes);
     }
 
+    private function resetMagicConstants() {
+        $this->class    = null;
+        $this->trait    = null;
+        $this->parent   = null;
+        $this->function = null;
+    }
+
     public function __clone() {
         clone_ref($this->finallys);
+        clone_ref($this->useFunction);
+        clone_ref($this->useClass);
+        clone_ref($this->useConstant);
+        clone_ref($this->class);
+        clone_ref($this->trait);
+        clone_ref($this->parent);
+        clone_ref($this->function);
     }
 
     /**
@@ -563,10 +586,8 @@ class Parser {
         } elseif ($node instanceof Node\Stmt\Function_) {
             $name = $this->prefixName($node->name);
             $self = clone $this;
-
+            $self->resetMagicConstants();
             $self->function = $name;
-            $self->class    = null;
-            $self->parent   = null;
             return new Function_(
                 $name,
                 $self->parseFunctionType($node),
@@ -576,17 +597,18 @@ class Parser {
             $name = $this->prefixName($node->name);
             $self = clone $this;
 
-            $self->class    = $name;
-            $self->function = null;
-            $self->parent   = null;
+            $self->resetMagicConstants();
+            $self->class = $name;
+
             return new Interface_($name, $self->parseClassMembers($node));
         } elseif ($node instanceof Node\Stmt\Trait_) {
             $name = $this->prefixName($node->name);
             $self = clone $this;
 
-            $self->class    = 'TEMPORARY';
-            $self->function = null;
-            $self->parent   = 'TEMPORARY';
+            $self->resetMagicConstants();
+            $self->trait  = $name;
+            $self->class  = 'TEMPORARY';
+            $self->parent = 'TEMPORARY';
             return new Trait_($name, $self->parseClassMembers($node));
         } elseif ($node instanceof Node\Stmt\Use_) {
             $this->addUses($node->uses, $node->type);
@@ -1248,10 +1270,9 @@ class Parser {
         }
 
         $self = clone $this;
-
-        $self->class    = $name;
-        $self->function = null;
-        $self->parent   = $parent;
+        $self->resetMagicConstants();
+        $self->class  = $name;
+        $self->parent = $parent;
         return new Class_(
             $name,
             $self->parseClassMembers($node),
