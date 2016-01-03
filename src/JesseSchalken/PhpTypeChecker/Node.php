@@ -6,6 +6,7 @@ use JesseSchalken\MagicUtils\DeepClone;
 use PhpParser\Lexer;
 use PhpParser\Node;
 use PhpParser\Parser\Php7;
+use PhpParser\PrettyPrinter\Standard;
 use function JesseSchalken\MagicUtils\clone_ref;
 use function JesseSchalken\PhpTypeChecker\recursive_scan2;
 
@@ -373,7 +374,7 @@ class File {
      * @param ErrorReceiver $errors
      * @return File[]
      */
-    static function parseFiles(array $paths, ErrorReceiver $errors):array {
+    static function parse(array $paths, ErrorReceiver $errors):array {
         /**
          * @var ParsedFile[] $parsed
          * @var self[]       $result
@@ -402,6 +403,53 @@ class File {
     private $shebang = '';
     /** @var Stmt */
     private $contents;
+
+    public function path() {
+        return $this->path;
+    }
+
+    public function unparse() {
+        $nodes = [];
+
+        $currentNamespace = null;
+        $currentNodes     = [];
+
+        foreach ($this->contents->split() as $stmt) {
+            $namespaces = $stmt->namespaces();
+            if (count($namespaces) > 1) {
+                throw new \Exception('Cant unparse single statement defining symbols in multiple namespaces');
+            }
+
+            $stmtNodes     = $stmt->unparse();
+            $stmtNamespace = $namespaces ? $namespaces[0] : null;
+
+            if (
+                $currentNamespace === null ||
+                $stmtNamespace === null ||
+                $stmtNamespace === $currentNamespace
+            ) {
+                $currentNamespace = $stmtNamespace;
+                $currentNodes     = array_merge($currentNodes, $stmtNodes);
+            } else {
+                $nodes[] = new Node\Stmt\Namespace_(
+                    $currentNamespace ? new Node\Name($currentNamespace) : null,
+                    $currentNodes
+                );
+
+                $currentNamespace = null;
+                $currentNodes     = [];
+            }
+        }
+
+        if ($currentNodes) {
+            $nodes[] = new Node\Stmt\Namespace_(
+                $currentNamespace ? new Node\Name($currentNamespace) : null,
+                $currentNodes
+            );
+        }
+
+        return (new Standard())->prettyPrintFile($nodes);
+    }
 }
 
 class Parser {
@@ -1032,10 +1080,15 @@ class Parser {
                 $this->parseExprNull($node->value)
             );
         } elseif ($node instanceof Node\Expr\ClassConstFetch) {
-            return new ClassConstFetch(
-                $this->parseExprClass($node->class),
-                $node->name
-            );
+            if ($node->name === 'class') {
+                if ($node->class instanceof Node\Name) {
+                    return $this->resolveClass($node->class);
+                } else {
+                    throw new \Exception('Use of ::class with expression is not supported');
+                }
+            } else {
+                return new ClassConstFetch($this->parseExprClass($node->class), $node->name);
+            }
         } elseif ($node instanceof Node\Expr\UnaryMinus) {
             return new UnOp(UnOp::NEGATE, $this->parseExpr($node->expr));
         } elseif ($node instanceof Node\Expr\UnaryPlus) {
@@ -1286,7 +1339,22 @@ abstract class Stmt {
     /**
      * @return SingleStmt[]
      */
-    abstract function stmts():array;
+    abstract function split():array;
+
+    /**
+     * @return Stmt[]
+     */
+    abstract function subStmts():array;
+
+    public function namespaces():array {
+        $namespaces = [];
+        foreach ($this->subStmts() as $stmt) {
+            foreach ($stmt->namespaces() as $namespace) {
+                $namespaces[] = $namespace;
+            }
+        }
+        return array_unique($namespaces);
+    }
 }
 
 final class StmtBlock extends Stmt {
@@ -1300,10 +1368,10 @@ final class StmtBlock extends Stmt {
         $this->stmts = $stmts;
     }
 
-    public function stmts():array {
+    public function split():array {
         $result = [];
         foreach ($this->stmts as $stmt) {
-            foreach ($stmt->stmts() as $stmt_) {
+            foreach ($stmt->split() as $stmt_) {
                 $result[] = $stmt_;
             }
         }
@@ -1313,11 +1381,22 @@ final class StmtBlock extends Stmt {
     public function add(Stmt $stmt) {
         $this->stmts[] = $stmt;
     }
+
+    function subStmts():array {
+        return $this->stmts;
+    }
 }
 
 abstract class SingleStmt extends Stmt {
-    final function stmts():array {
+    final function split():array {
         return [$this];
+    }
+
+    /**
+     * @return Node[]
+     */
+    public function unparse():array {
+        return [];
     }
 }
 
@@ -1335,6 +1414,10 @@ class DoWhile extends SingleStmt {
         $this->body = $body;
         $this->cond = $cond;
     }
+
+    function subStmts():array {
+        return [$this->body, $this->cond];
+    }
 }
 
 class If_ extends SingleStmt {
@@ -1349,6 +1432,10 @@ class If_ extends SingleStmt {
         $this->cond  = $cond;
         $this->true  = $true;
         $this->false = $false;
+    }
+
+    function subStmts():array {
+        return [$this->cond, $this->true, $this->false];
     }
 }
 
@@ -1368,6 +1455,10 @@ class ConstFetch extends Expr {
     public function __construct($name) {
         $this->name = $name;
     }
+
+    function subStmts():array {
+        return [];
+    }
 }
 
 class ClassConstFetch extends Expr {
@@ -1384,6 +1475,10 @@ class ClassConstFetch extends Expr {
         $this->class = $class;
         $this->const = $const;
     }
+
+    function subStmts():array {
+        return [$this->class];
+    }
 }
 
 class Return_ extends SingleStmt {
@@ -1392,6 +1487,10 @@ class Return_ extends SingleStmt {
 
     public function __construct(Expr $expr = null) {
         $this->expr = $expr;
+    }
+
+    function subStmts():array {
+        return $this->expr ? [$this->expr] : [];
     }
 }
 
@@ -1405,6 +1504,10 @@ class Variable extends Expr {
 
     public function isLValue() {
         return true;
+    }
+
+    function subStmts():array {
+        return [$this->name];
     }
 }
 
@@ -1426,6 +1529,10 @@ class PropertyAccess extends Expr {
     public function isLValue() {
         return $this->object->isLValue();
     }
+
+    function subStmts():array {
+        return [$this->object, $this->property];
+    }
 }
 
 class StaticPropertyAccess extends Expr {
@@ -1445,6 +1552,10 @@ class StaticPropertyAccess extends Expr {
 
     public function isLValue() {
         return true;
+    }
+
+    function subStmts():array {
+        return [$this->class, $this->property];
     }
 }
 
@@ -1466,6 +1577,10 @@ class ArrayAccess extends Expr {
     public function isLValue() {
         return $this->array->isLValue();
     }
+
+    function subStmts():array {
+        return $this->key ? [$this->array, $this->key] : [$this->array];
+    }
 }
 
 class Include_ extends Expr {
@@ -1484,21 +1599,9 @@ class Include_ extends Expr {
         $this->once    = $once;
         $this->expr    = $expr;
     }
-}
 
-class Concat extends Expr {
-    /** @var  Expr */
-    private $left;
-    /** @var  Expr */
-    private $right;
-
-    /**
-     * @param Expr $left
-     * @param Expr $right
-     */
-    public function __construct(Expr $left, Expr $right) {
-        $this->left  = $left;
-        $this->right = $right;
+    function subStmts():array {
+        return [$this->expr];
     }
 }
 
@@ -1525,6 +1628,10 @@ class MagicConst extends Expr {
         $this->type  = $type;
         $this->value = $value;
     }
+
+    function subStmts():array {
+        return [];
+    }
 }
 
 class Literal extends Expr {
@@ -1537,6 +1644,10 @@ class Literal extends Expr {
     public function __construct($value) {
         $this->value = $value;
     }
+
+    function subStmts():array {
+        return [];
+    }
 }
 
 class Call extends Expr {
@@ -1548,6 +1659,14 @@ class Call extends Expr {
      */
     public function __construct(array $args) {
         $this->args = $args;
+    }
+
+    function subStmts():array {
+        $stmts = [];
+        foreach ($this->args as $arg) {
+            $stmts[] = $arg->expr();
+        }
+        return $stmts;
     }
 }
 
@@ -1562,6 +1681,10 @@ class FunctionCall extends Call {
     public function __construct(Expr $function, array $args) {
         parent::__construct($args);
         $this->function = $function;
+    }
+
+    function subStmts():array {
+        return array_merge(parent::subStmts(), [$this->function]);
     }
 }
 
@@ -1581,6 +1704,10 @@ class StaticCall extends Call {
         $this->class  = $class;
         $this->method = $method;
     }
+
+    function subStmts():array {
+        return array_merge(parent::subStmts(), [$this->class, $this->method]);
+    }
 }
 
 class MethodCall extends Call {
@@ -1599,6 +1726,10 @@ class MethodCall extends Call {
         $this->object = $object;
         $this->method = $method;
     }
+
+    function subStmts():array {
+        return array_merge(parent::subStmts(), [$this->object, $this->method]);
+    }
 }
 
 class CallArg {
@@ -1616,6 +1747,10 @@ class CallArg {
         $this->expr  = $expr;
         $this->byRef = $byRef;
         $this->splat = $splat;
+    }
+
+    public function expr() {
+        return $this->expr;
     }
 }
 
@@ -1639,7 +1774,24 @@ abstract class Classish extends SingleStmt {
         return $this->name;
     }
 
+    /**
+     * @return ClassMember[]
+     */
     abstract function members();
+
+    function subStmts():array {
+        $stmts = [];
+        foreach ($this->members() as $member) {
+            foreach ($member->subStmts() as $stmt) {
+                $stmts[] = $stmt;
+            }
+        }
+        return $stmts;
+    }
+
+    public function namespaces():array {
+        return array_merge(parent::namespaces(), [extract_namespace($this->name)]);
+    }
 }
 
 class Trait_ extends Classish {
@@ -1661,10 +1813,15 @@ class Trait_ extends Classish {
 }
 
 class Not_ extends Expr {
+    /** @var Expr */
     private $expr;
 
     function __construct(Expr $expr) {
         $this->expr = $expr;
+    }
+
+    function subStmts():array {
+        return [$this->expr];
     }
 }
 
@@ -1723,6 +1880,15 @@ class Interface_ extends Classish {
     }
 }
 
+function extract_namespace($name) {
+    $pos = strrpos($name, '\\');
+    if ($pos === false) {
+        return '';
+    } else {
+        return substr($name, 0, $pos);
+    }
+}
+
 class Function_ extends SingleStmt {
     /** @var string */
     private $name;
@@ -1740,6 +1906,18 @@ class Function_ extends SingleStmt {
         $this->name = $name;
         $this->type = $type;
         $this->body = $body;
+    }
+
+    function subStmts():array {
+        $stmts = $this->type->subStmts();
+        if ($this->body) {
+            $stmts[] = $this->body;
+        }
+        return $stmts;
+    }
+
+    public function namespaces():array {
+        return array_merge(parent::namespaces(), [extract_namespace($this->name)]);
     }
 }
 
@@ -1764,6 +1942,10 @@ abstract class ClassMember {
     public function visibility() {
         return $this->visibility;
     }
+
+    public function subStmts() {
+        return [];
+    }
 }
 
 class Property extends ClassMember {
@@ -1787,6 +1969,10 @@ class Property extends ClassMember {
         $this->type    = $type;
         $this->default = $default;
     }
+
+    public function subStmts() {
+        return $this->default ? $this->default->subStmts() : [];
+    }
 }
 
 class FunctionSignature {
@@ -1804,6 +1990,16 @@ class FunctionSignature {
     public function __construct($returnRef, array $params) {
         $this->returnRef = $returnRef;
         $this->params    = $params;
+    }
+
+    public function subStmts() {
+        $stmts = [];
+        foreach ($this->params as $param) {
+            foreach ($param->subStmts() as $stmt) {
+                $stmts[] = $stmt;
+            }
+        }
+        return $stmts;
     }
 }
 
@@ -1840,6 +2036,14 @@ class Method_ extends ClassMember {
     public function isFinal() {
         return $this->final ? true : false;
     }
+
+    public function subStmts() {
+        $stmts = $this->type->subStmts();
+        if ($this->body) {
+            $stmts[] = $this->body;
+        }
+        return $stmts;
+    }
 }
 
 class FunctionParam {
@@ -1864,6 +2068,10 @@ class FunctionParam {
         $this->passByRef = $passByRef;
         $this->variadic  = $variadic;
     }
+
+    public function subStmts() {
+        return $this->default ? [$this->default] : [];
+    }
 }
 
 class Array_ extends Expr {
@@ -1875,6 +2083,16 @@ class Array_ extends Expr {
      */
     public function __construct(array $items) {
         $this->items = $items;
+    }
+
+    function subStmts():array {
+        $stmts = [];
+        foreach ($this->items as $item) {
+            foreach ($item->subStmts() as $stmt) {
+                $stmts[] = $stmt;
+            }
+        }
+        return $stmts;
     }
 }
 
@@ -1896,6 +2114,14 @@ class ArrayItem {
         $this->value = $value;
         $this->byRef = $byRef;
     }
+
+    public function subStmts() {
+        $stmts = [$this->value];
+        if ($this->key) {
+            $stmts[] = $this->key;
+        }
+        return $stmts;
+    }
 }
 
 class Empty_ extends Expr {
@@ -1904,6 +2130,10 @@ class Empty_ extends Expr {
 
     public function __construct(Expr $expr) {
         $this->expr = $expr;
+    }
+
+    function subStmts():array {
+        return [$this->expr];
     }
 }
 
@@ -1921,6 +2151,14 @@ class New_ extends Expr {
         $this->class = $class;
         $this->args  = $args;
     }
+
+    function subStmts():array {
+        $stmts = [$this->class];
+        foreach ($this->args as $arg) {
+            $stmts[] = $arg->expr();
+        }
+        return $stmts;
+    }
 }
 
 class Print_ extends Expr {
@@ -1929,6 +2167,10 @@ class Print_ extends Expr {
 
     public function __construct(Expr $expr) {
         $this->expr = $expr;
+    }
+
+    function subStmts():array {
+        return [$this->expr];
     }
 }
 
@@ -1953,6 +2195,12 @@ class Closure extends Expr {
         $this->type   = $type;
         $this->uses   = $uses;
         $this->body   = $body;
+    }
+
+    function subStmts():array {
+        $stmts = [$this->body];
+        $stmts = array_merge($stmts, $this->type->subStmts());
+        return $stmts;
     }
 }
 
@@ -1990,6 +2238,14 @@ class Ternary extends Expr {
         $this->true  = $true;
         $this->false = $false;
     }
+
+    function subStmts():array {
+        $stmts = [$this->cond, $this->false];
+        if ($this->true) {
+            $stmts[] = $this->true;
+        }
+        return $stmts;
+    }
 }
 
 class ConcatMany extends Expr {
@@ -2002,6 +2258,10 @@ class ConcatMany extends Expr {
     public function __construct(array $exprs) {
         $this->exprs = $exprs;
     }
+
+    function subStmts():array {
+        return $this->exprs;
+    }
 }
 
 class Isset_ extends Expr {
@@ -2013,6 +2273,10 @@ class Isset_ extends Expr {
      */
     public function __construct(array $exprs) {
         $this->exprs = $exprs;
+    }
+
+    function subStmts():array {
+        return $this->exprs;
     }
 }
 
@@ -2042,6 +2306,18 @@ class Foreach_ extends SingleStmt {
         $this->body  = $body;
         $this->byRef = $byRef;
     }
+
+    function subStmts():array {
+        $stmts = [
+            $this->array,
+            $this->value,
+            $this->body,
+        ];
+        if ($this->key) {
+            $stmts[] = $this->key;
+        }
+        return $stmts;
+    }
 }
 
 class Echo_ extends SingleStmt {
@@ -2053,6 +2329,10 @@ class Echo_ extends SingleStmt {
      */
     public function __construct(array $exprs) {
         $this->exprs = $exprs;
+    }
+
+    function subStmts():array {
+        return $this->exprs;
     }
 }
 
@@ -2130,6 +2410,10 @@ class BinOp extends Expr {
         $this->type  = $type;
         $this->right = $right;
     }
+
+    function subStmts():array {
+        return [$this->left, $this->right];
+    }
 }
 
 class Cast extends Expr {
@@ -2153,6 +2437,10 @@ class Cast extends Expr {
     public function __construct($type, Expr $expr) {
         $this->type = $type;
         $this->expr = $expr;
+    }
+
+    function subStmts():array {
+        return [$this->expr];
     }
 }
 
@@ -2184,6 +2472,10 @@ class UnOp extends Expr {
         $this->type = $type;
         $this->expr = $expr;
     }
+
+    function subStmts():array {
+        return [$this->expr];
+    }
 }
 
 class InlineHTML extends Expr {
@@ -2196,6 +2488,10 @@ class InlineHTML extends Expr {
     public function __construct($html) {
         $this->html = $html;
     }
+
+    function subStmts():array {
+        return [];
+    }
 }
 
 class Exit_ extends Expr {
@@ -2207,6 +2503,10 @@ class Exit_ extends Expr {
      */
     public function __construct(Expr $expr = null) {
         $this->expr = $expr;
+    }
+
+    function subStmts():array {
+        return $this->expr ? [$this->expr] : [];
     }
 }
 
@@ -2224,6 +2524,14 @@ class Const_ extends SingleStmt {
         $this->name  = $name;
         $this->value = $value;
     }
+
+    function subStmts():array {
+        return [$this->value];
+    }
+
+    public function namespaces():array {
+        return array_merge(parent::namespaces(), [extract_namespace($this->name)]);
+    }
 }
 
 class Throw_ extends SingleStmt {
@@ -2235,6 +2543,10 @@ class Throw_ extends SingleStmt {
      */
     public function __construct(Expr $expr) {
         $this->expr = $expr;
+    }
+
+    function subStmts():array {
+        return [$this->expr];
     }
 }
 
@@ -2251,6 +2563,10 @@ class StaticVar extends SingleStmt {
     public function __construct($name, Expr $value = null) {
         $this->name  = $name;
         $this->value = $value;
+    }
+
+    function subStmts():array {
+        return $this->value ? [$this->value] : [];
     }
 }
 
@@ -2276,6 +2592,15 @@ class For_ extends SingleStmt {
         $this->loop = $loop;
         $this->body = $body;
     }
+
+    function subStmts():array {
+        return array_merge(
+            $this->init,
+            $this->cond,
+            $this->loop,
+            [$this->body]
+        );
+    }
 }
 
 class Break_ extends SingleStmt {
@@ -2288,6 +2613,10 @@ class Break_ extends SingleStmt {
     public function __construct($levels = 1) {
         $this->levels = $levels;
     }
+
+    function subStmts():array {
+        return [];
+    }
 }
 
 class Continue_ extends SingleStmt {
@@ -2299,6 +2628,10 @@ class Continue_ extends SingleStmt {
      */
     public function __construct($levels) {
         $this->levels = $levels;
+    }
+
+    function subStmts():array {
+        return [];
     }
 }
 
@@ -2316,6 +2649,17 @@ class Yield_ extends Expr {
         $this->key   = $key;
         $this->value = $value;
     }
+
+    function subStmts():array {
+        $stmts = [];
+        if ($this->key) {
+            $stmts[] = $this->key;
+        }
+        if ($this->value) {
+            $stmts[] = $this->value;
+        }
+        return $stmts;
+    }
 }
 
 class Switch_ extends SingleStmt {
@@ -2331,6 +2675,16 @@ class Switch_ extends SingleStmt {
     public function __construct(Expr $expr, array $cases) {
         $this->expr  = $expr;
         $this->cases = $cases;
+    }
+
+    function subStmts():array {
+        $stmts = [$this->expr];
+        foreach ($this->cases as $case) {
+            foreach ($case->subStmts() as $stmt) {
+                $stmts[] = $stmt;
+            }
+        }
+        return $stmts;
     }
 }
 
@@ -2348,6 +2702,14 @@ class Case_ {
         $this->expr = $expr;
         $this->stmt = $stmt;
     }
+
+    public function subStmts() {
+        $stmts = [$this->stmt];
+        if ($this->expr) {
+            $stmts[] = $this->expr;
+        }
+        return $stmts;
+    }
 }
 
 class Unset_ extends SingleStmt {
@@ -2359,6 +2721,10 @@ class Unset_ extends SingleStmt {
      */
     public function __construct(array $exprs) {
         $this->exprs = $exprs;
+    }
+
+    function subStmts():array {
+        return $this->exprs;
     }
 }
 
@@ -2376,6 +2742,10 @@ class While_ extends SingleStmt {
         $this->cond = $cond;
         $this->body = $body;
     }
+
+    function subStmts():array {
+        return [$this->cond, $this->body];
+    }
 }
 
 class List_ extends Expr {
@@ -2387,6 +2757,16 @@ class List_ extends Expr {
      */
     public function __construct(array $exprs) {
         $this->exprs = $exprs;
+    }
+
+    function subStmts():array {
+        $stmts = [];
+        foreach ($this->exprs as $expr) {
+            if ($expr) {
+                $stmts[] = $expr;
+            }
+        }
+        return $stmts;
     }
 }
 
@@ -2404,9 +2784,19 @@ class Try_ extends SingleStmt {
         $this->body    = $body;
         $this->catches = $catches;
     }
+
+    function subStmts():array {
+        $stmts = [$this->body];
+        foreach ($this->catches as $catch) {
+            foreach ($catch->subStmts() as $stmt) {
+                $stmts[] = $stmt;
+            }
+        }
+        return $stmts;
+    }
 }
 
-class Catch_ extends SingleStmt {
+class Catch_ {
     /** @var string */
     private $class;
     /** @var string */
@@ -2424,6 +2814,10 @@ class Catch_ extends SingleStmt {
         $this->variable = $variable;
         $this->body     = $body;
     }
+
+    public function subStmts() {
+        return [$this->body];
+    }
 }
 
 class Global_ extends SingleStmt {
@@ -2435,6 +2829,10 @@ class Global_ extends SingleStmt {
      */
     public function __construct(Expr $expr) {
         $this->expr = $expr;
+    }
+
+    function subStmts():array {
+        return [$this->expr];
     }
 }
 
@@ -2448,6 +2846,10 @@ class Label_ extends SingleStmt {
     public function __construct($name) {
         $this->name = $name;
     }
+
+    function subStmts():array {
+        return [];
+    }
 }
 
 class Goto_ extends SingleStmt {
@@ -2460,6 +2862,10 @@ class Goto_ extends SingleStmt {
     public function __construct($name) {
         $this->name = $name;
     }
+
+    function subStmts():array {
+        return [];
+    }
 }
 
 class ShellExec extends Expr {
@@ -2471,6 +2877,10 @@ class ShellExec extends Expr {
      */
     public function __construct(array $parts) {
         $this->parts = $parts;
+    }
+
+    function subStmts():array {
+        return $this->parts;
     }
 }
 
@@ -2499,6 +2909,10 @@ class ClassName extends AbstractClassName {
     public function toString($static = null) {
         return $this->class;
     }
+
+    function subStmts():array {
+        return [];
+    }
 }
 
 /**
@@ -2511,6 +2925,10 @@ class StaticClassName extends AbstractClassName {
         } else {
             return $static;
         }
+    }
+
+    function subStmts():array {
+        return [];
     }
 }
 

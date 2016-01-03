@@ -5,8 +5,6 @@ namespace JesseSchalken\PhpTypeChecker;
 
 use JesseSchalken\PhpTypeChecker\Node\ErrorReceiver;
 use JesseSchalken\PhpTypeChecker\Node\File;
-use JesseSchalken\PhpTypeChecker\Node\Parser;
-use Zend\Barcode\Object\Error;
 
 require_once __DIR__ . '/../vendor/autoload.php';
 
@@ -23,7 +21,7 @@ function recursive_scan($input):array {
             }
         }
         return $result;
-    } else if (pathinfo($input, PATHINFO_EXTENSION) === 'php') {
+    } elseif (pathinfo($input, PATHINFO_EXTENSION) === 'php') {
         return [$input];
     } else {
         return [];
@@ -50,14 +48,33 @@ Usage:
 s
     );
 
-    $input = $args['IN_DIR'];
-    $files = recursive_scan2($input);
+    $input  = $args['IN_DIR'];
+    $output = $args['OUT_DIR'];
+    $files  = recursive_scan2($input);
     foreach ($args['--include'] as $include) {
         $files = array_merge($files, recursive_scan2($include));
     }
     $files = array_unique($files);
     sort($files, SORT_STRING);
-    $files = File::parseFiles($files, new ErrorReceiver());
+    $files = File::parse($files, new ErrorReceiver());
+    if ($output) {
+        foreach ($files as $file) {
+            $path = $file->path();
+            $pos  = strlen($input);
+
+            if (substr($path, 0, $pos) === $input) {
+                $path = $output . substr($path, $pos);
+            } else {
+                continue;
+            }
+
+            $dir = dirname($path);
+            if (!is_dir($dir)) {
+                mkdir($dir, 0777, true);
+            }
+            file_put_contents($path, $file->unparse());
+        }
+    }
 }
 
 class Project {
