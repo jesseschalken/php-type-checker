@@ -89,11 +89,116 @@ abstract class DefinedNames {
     }
 }
 
+abstract class Uses {
+    /** @var Node\Name */
+    private $namespace;
+    /** @var Node\Name[] */
+    private $uses;
+    /** @var DefinedNames */
+    private $defined;
+
+    public function __construct(Node\Name $namespace, DefinedNames $defined) {
+        $this->namespace = $namespace;
+        $this->defined   = $defined;
+    }
+
+    /**
+     * @param Node\Name $name
+     * @param Uses      $classes
+     * @return Node\Name
+     */
+    public final function resolve(Node\Name $name, Uses $classes) {
+        if ($name->isFullyQualified()) {
+            // \Foo\Bar
+            return $name;
+        } elseif ($name->isRelative()) {
+            // namespace\Foo\Bar
+            return Node\Name::concat($this->namespace, $name);
+        } elseif ($name->isQualified()) {
+            // Foo\Bar
+            return Node\Name::concat($classes->resolveUnqualified($name->getFirst()), $name->slice(1));
+        } else {
+            // Bar
+            return $this->resolveUnqualified($name->getFirst());
+        }
+    }
+
+    /**
+     * @param string $alias
+     * @return Node\Name
+     */
+    private function resolveUnqualified($alias) {
+        if (isset($this->uses[$this->normalize($alias)])) {
+            return $this->uses[$this->normalize($alias)];
+        } else {
+            return $this->resolveDefault($alias);
+        }
+    }
+
+    /**
+     * @param string $alias
+     * @return Node\Name
+     */
+    protected function resolveDefault($alias) {
+        return Node\Name::concat($this->namespace, $alias);
+    }
+
+    /**
+     * @param Node\Name   $name
+     * @param string|null $alias
+     */
+    public final function add(Node\Name $name, $alias = null) {
+        $this->uses[$this->normalize($alias ?: $name->getLast())] = $name;
+    }
+
+    /**
+     * @param Node\Name $name
+     * @return bool
+     */
+    protected final function defined(Node\Name $name) {
+        return $this->defined->has($name->toString());
+    }
+
+    /**
+     * @param string $alias
+     * @return string
+     */
+    protected function normalize($alias) {
+        return $alias;
+    }
+}
+
+class ClassUses extends Uses {
+    protected function normalize($alias) {
+        return strtolower($alias);
+    }
+}
+
+class FunctionUses extends Uses {
+    protected function normalize($alias) {
+        return strtolower($alias);
+    }
+
+    protected function resolveDefault($alias) {
+        $local = parent::resolveDefault($alias);
+
+        return $this->defined($local) ? $local : new Node\Name([$alias]);
+    }
+}
+
+class ConstantUses extends Uses {
+    protected function resolveDefault($alias) {
+        $local = parent::resolveDefault($alias);
+
+        return $this->defined($local) ? $local : new Node\Name([$alias]);
+    }
+}
+
 class DefinedNamesConstants extends DefinedNames {
     protected function normalize($name) {
         // $name is the name of the constant including the namespace.
         // Namespaces are case insensitive, but constants are case sensitive,
-        // therefire split the name on the last "\" and strtolower() the left side.
+        // therefire split the name after the last "\" and strtolower() the left side.
         $pos = strrpos($name, '\\');
         $pos = $pos === false ? 0 : $pos + 1;
 
@@ -130,7 +235,7 @@ function node_sub_nodes(Node $node):array {
                     $result[] = $value2;
                 }
             }
-        } else if ($value instanceof Node) {
+        } elseif ($value instanceof Node) {
             $result[] = $value;
         }
     }
@@ -171,13 +276,13 @@ class GlobalDefinedNames {
     public function addNode(Node $node, $prefix = '') {
         if ($node instanceof Node\Stmt\Function_) {
             $this->functions->add($prefix . $node->name);
-        } else if ($node instanceof Node\Stmt\ClassLike) {
+        } elseif ($node instanceof Node\Stmt\ClassLike) {
             $this->classes->add($prefix . $node->name);
-        } else if ($node instanceof Node\Stmt\Const_) {
+        } elseif ($node instanceof Node\Stmt\Const_) {
             foreach ($node->consts as $const) {
                 $this->constants->add($prefix . $const->name);
             }
-        } else if ($node instanceof Node\Stmt\Namespace_) {
+        } elseif ($node instanceof Node\Stmt\Namespace_) {
             $prefix = $node->name ? $node->name->toString() . '\\' : '';
         }
 
@@ -316,12 +421,12 @@ class Parser {
 
     /** @var Node\Name */
     private $namespace;
-    /** @var Node\Name[] */
-    private $useFunction = [];
-    /** @var Node\Name[] This is used for all four of classes, interfaces, traits and namespaces */
-    private $useClass = [];
-    /** @var Node\Name[] */
-    private $useConstant = [];
+    /** @var Uses */
+    private $useFunction;
+    /** @var Uses This is used for all four of classes, interfaces, traits and namespaces */
+    private $useClass;
+    /** @var Uses */
+    private $useConstant;
 
     /** @var StmtBlock[] */
     private $finallys = [];
@@ -340,70 +445,46 @@ class Parser {
      * @param GlobalDefinedNames $globals
      */
     public function __construct($file, GlobalDefinedNames $globals) {
-        $this->namespace   = new Node\Name('');
         $this->globals     = $globals;
         $this->locals      = new DefinedNamesCaseSensitive();
         $this->finallys[0] = new StmtBlock();
         $this->file        = $file;
+        $this->resetNamespace();
+    }
+
+    private function resetNamespace(Node\Name $name = null) {
+        $this->namespace   = $name ?: new Node\Name('');
+        $this->useClass    = new ClassUses($this->namespace, $this->globals->classes);
+        $this->useFunction = new FunctionUses($this->namespace, $this->globals->classes);
+        $this->useConstant = new ConstantUses($this->namespace, $this->globals->classes);
     }
 
     public function __clone() {
         clone_ref($this->finallys);
     }
 
-    private function resolveClass(Node\Name $name):string {
-        return $this->resolve($name, $this->useClass);
-    }
-
-    private function resolveConst(Node\Name $name):string {
-        return $this->resolve($name, $this->useConstant, $this->globals->constants);
-    }
-
-    private function resolveFunction(Node\Name $name):string {
-        return $this->resolve($name, $this->useFunction, $this->globals->functions);
+    /**
+     * @param Node\Name $name
+     * @return string
+     */
+    private function resolveClass(Node\Name $name) {
+        return $this->useClass->resolve($name, $this->useClass)->toString();
     }
 
     /**
-     * TODO use a special object for the $use which knows which knows that constants are case sensitive
-     * @param Node\Name    $name
-     * @param Node\Name[]  $uses
-     * @param DefinedNames $defined
+     * @param Node\Name $name
      * @return string
      */
-    private function resolve(Node\Name $name, array $uses, DefinedNames $defined = null) {
-        if ($name->isFullyQualified()) {
-            // Fully qualified names bypass use statements
-        } else if ($name->isRelative()) {
-            // Namespace-qualified names bypass use statements
-            $name = Node\Name::concat($this->namespace, $name);
-        } else {
-            // Grab the first part to look it up in the use statements
-            $first = $name->getFirst();
-            if ($name->isQualified()) {
-                // If the name has multiple parts, the first needs to be looked up in the class use statements
-                if (isset($this->useClass[$first])) {
-                    $name = Node\Name::concat($this->useClass[$first], $name->slice(1));
-                } else {
-                    $name = Node\Name::concat($this->namespace, $name);
-                }
-            } else {
-                // If the name has only one part, then it needs to be looked up in the use statements for the type of
-                // name (function, constant, class/trait/interface)
-                if (isset($uses[$first])) {
-                    $name = $uses[$first];
-                } else {
-                    $name = Node\Name::concat($this->namespace, $name);
-                    // !!! Special case for constants and functions
-                    // A plain unqualified name like "array_slice" or "STR_PAD_LEFT" will revert to the top namespace
-                    // if it doesn't exist in the current namespace.
-                    if ($defined && !$defined->has($name->toString())) {
-                        $name = new Node\Name($first);
-                    }
-                }
-            }
-        }
+    private function resolveConst(Node\Name $name) {
+        return $this->useConstant->resolve($name, $this->useClass)->toString();
+    }
 
-        return $name->toString();
+    /**
+     * @param Node\Name $name
+     * @return string
+     */
+    private function resolveFunction(Node\Name $name) {
+        return $this->useConstant->resolve($name, $this->useClass)->toString();
     }
 
     /**
@@ -425,7 +506,7 @@ class Parser {
     private function parseStmt(Node $node):Stmt {
         if ($node instanceof Node\Expr) {
             return $this->parseExpr($node);
-        } else if ($node instanceof Node\Stmt\If_) {
+        } elseif ($node instanceof Node\Stmt\If_) {
             $false = $this->parseStmts($node->else ? $node->else->stmts : []);
 
             foreach (array_reverse($node->elseifs) as $elseIf) {
@@ -441,7 +522,7 @@ class Parser {
                 $this->parseStmts($node->stmts),
                 $false
             );
-        } else if ($node instanceof Node\Stmt\Return_) {
+        } elseif ($node instanceof Node\Stmt\Return_) {
             $expr = $this->parseExprNull($node->expr);
 
             if ($this->finallys) {
@@ -459,22 +540,18 @@ class Parser {
             }
 
             return new Return_($expr);
-        } else if ($node instanceof Node\Stmt\Namespace_) {
-            $copy              = clone $this;
-            $copy->namespace   = $node->name ?: new Node\Name('');
-            $copy->useClass    = [];
-            $copy->useConstant = [];
-            $copy->useFunction = [];
-
+        } elseif ($node instanceof Node\Stmt\Namespace_) {
+            $copy = clone $this;
+            $copy->resetNamespace($node->name);
             return $copy->parseStmts($node->stmts);
-        } else if ($node instanceof Node\Stmt\Class_) {
+        } elseif ($node instanceof Node\Stmt\Class_) {
             $name = $this->prefixName($node->name);
             $self = clone $this;
 
             $self->__TRAIT__ = '';
             $self->__CLASS__ = $name;
             return new Class_($name, $self->parseClassMembers($node));
-        } else if ($node instanceof Node\Stmt\Function_) {
+        } elseif ($node instanceof Node\Stmt\Function_) {
             $name = $this->prefixName($node->name);
             $self = clone $this;
 
@@ -485,27 +562,27 @@ class Parser {
                 $self->parseFunctionType($node),
                 $self->parseStmts($node->stmts)
             );
-        } else if ($node instanceof Node\Stmt\Interface_) {
+        } elseif ($node instanceof Node\Stmt\Interface_) {
             $name = $this->prefixName($node->name);
             $self = clone $this;
 
             $self->__TRAIT__ = '';
             $self->__CLASS__ = $name;
             return new Interface_($name, $self->parseClassMembers($node));
-        } else if ($node instanceof Node\Stmt\Trait_) {
+        } elseif ($node instanceof Node\Stmt\Trait_) {
             $name = $this->prefixName($node->name);
             $self = clone $this;
 
             $self->__TRAIT__ = $name;
             $self->__CLASS__ = $name;
             return new Trait_($name, $self->parseClassMembers($node));
-        } else if ($node instanceof Node\Stmt\Use_) {
+        } elseif ($node instanceof Node\Stmt\Use_) {
             $this->addUses($node->uses, $node->type);
             return new StmtBlock();
-        } else if ($node instanceof Node\Stmt\GroupUse) {
+        } elseif ($node instanceof Node\Stmt\GroupUse) {
             $this->addUses($node->uses, $node->type, $node->prefix);
             return new StmtBlock();
-        } else if ($node instanceof Node\Stmt\Foreach_) {
+        } elseif ($node instanceof Node\Stmt\Foreach_) {
             return new Foreach_(
                 $this->parseExpr($node->expr),
                 $this->parseExprNull($node->keyVar),
@@ -513,11 +590,11 @@ class Parser {
                 $node->byRef,
                 $this->parseStmts($node->stmts)
             );
-        } else if ($node instanceof Node\Stmt\Echo_) {
+        } elseif ($node instanceof Node\Stmt\Echo_) {
             return new Echo_($this->parseExprs($node->exprs));
-        } else if ($node instanceof Node\Stmt\InlineHTML) {
+        } elseif ($node instanceof Node\Stmt\InlineHTML) {
             return new InlineHTML($node->value);
-        } else if ($node instanceof Node\Stmt\Const_) {
+        } elseif ($node instanceof Node\Stmt\Const_) {
             $stmts = [];
             foreach ($node->consts as $const) {
                 $stmts[] = new Const_(
@@ -526,9 +603,9 @@ class Parser {
                 );
             }
             return new StmtBlock($stmts);
-        } else if ($node instanceof Node\Stmt\Throw_) {
+        } elseif ($node instanceof Node\Stmt\Throw_) {
             return new Throw_($this->parseExpr($node->expr));
-        } else if ($node instanceof Node\Stmt\Static_) {
+        } elseif ($node instanceof Node\Stmt\Static_) {
             $stmts = [];
             foreach ($node->vars as $finallyVar) {
                 $stmts[] = new StaticVar(
@@ -537,17 +614,17 @@ class Parser {
                 );
             }
             return new StmtBlock($stmts);
-        } else if ($node instanceof Node\Stmt\For_) {
+        } elseif ($node instanceof Node\Stmt\For_) {
             return new For_(
                 $this->parseExprs($node->init),
                 $this->parseExprs($node->cond),
                 $this->parseExprs($node->loop),
                 $this->parseStmts($node->stmts)
             );
-        } else if ($node instanceof Node\Stmt\Break_) {
+        } elseif ($node instanceof Node\Stmt\Break_) {
             if ($node->num === null) {
                 $levels = 1;
-            } else if ($node->num instanceof Node\Scalar\LNumber) {
+            } elseif ($node->num instanceof Node\Scalar\LNumber) {
                 $levels = $node->num->value;
             } else {
                 throw new \Exception('"break" statement must use a constant operand');
@@ -557,10 +634,10 @@ class Parser {
                 array_slice($this->finallys, 0, $levels),
                 [new Break_($levels)]
             ));
-        } else if ($node instanceof Node\Stmt\Continue_) {
+        } elseif ($node instanceof Node\Stmt\Continue_) {
             if ($node->num === null) {
                 $levels = 1;
-            } else if ($node->num instanceof Node\Scalar\LNumber) {
+            } elseif ($node->num instanceof Node\Scalar\LNumber) {
                 $levels = $node->num->value;
             } else {
                 throw new \Exception('"continue" statement must use a constant operand');
@@ -570,7 +647,7 @@ class Parser {
                 array_slice($this->finallys, 0, $levels),
                 [new Continue_($levels)]
             ));
-        } else if ($node instanceof Node\Stmt\Switch_) {
+        } elseif ($node instanceof Node\Stmt\Switch_) {
             $cases = [];
             foreach ($node->cases as $case) {
                 $cases[] = new Case_(
@@ -582,11 +659,11 @@ class Parser {
                 $this->parseExpr($node->cond),
                 $cases
             );
-        } else if ($node instanceof Node\Stmt\Unset_) {
+        } elseif ($node instanceof Node\Stmt\Unset_) {
             return new Unset_($this->parseExprs($node->vars));
-        } else if ($node instanceof Node\Stmt\While_) {
+        } elseif ($node instanceof Node\Stmt\While_) {
             return new While_($this->parseExpr($node->cond), $this->parseStmts($node->stmts));
-        } else if ($node instanceof Node\Stmt\TryCatch) {
+        } elseif ($node instanceof Node\Stmt\TryCatch) {
             if ($node->finallyStmts) {
                 $finally      = $this->parseStmts($node->finallyStmts);
                 $finallyVar   = $this->newUnusedvariable();
@@ -617,20 +694,20 @@ class Parser {
             } else {
                 return $this->parseTryCatch($node);
             }
-        } else if ($node instanceof Node\Stmt\Do_) {
+        } elseif ($node instanceof Node\Stmt\Do_) {
             return new DoWhile(
                 $this->parseStmts($node->stmts),
                 $this->parseExpr($node->cond)
             );
-        } else if ($node instanceof Node\Stmt\Global_) {
+        } elseif ($node instanceof Node\Stmt\Global_) {
             $stmts = new StmtBlock();
             foreach ($node->vars as $var) {
                 $stmts->add(new Global_($this->parseExpr($var)));
             }
             return $stmts;
-        } else if ($node instanceof Node\Stmt\Label) {
+        } elseif ($node instanceof Node\Stmt\Label) {
             return new Label_($node->name);
-        } else if ($node instanceof Node\Stmt\Goto_) {
+        } elseif ($node instanceof Node\Stmt\Goto_) {
             return new Goto_($node->name);
         } else {
             throw new \Exception('Unhandled statement type: ' . get_class($node));
@@ -674,18 +751,17 @@ class Parser {
      */
     private function addUses(array $uses, $type_, $prefix = null) {
         foreach ($uses as $use) {
-            $name  = $prefix ? Node\Name::concat($prefix, $use->name) : $use->name;
-            $alias = $use->alias === null ? $use->name->getLast() : $use->alias;
-            $type  = $use->type === Node\Stmt\Use_::TYPE_UNKNOWN ? $type_ : $use->type;
+            $name = $prefix ? Node\Name::concat($prefix, $use->name) : $use->name;
+            $type = $use->type === Node\Stmt\Use_::TYPE_UNKNOWN ? $type_ : $use->type;
             switch ($type) {
                 case Node\Stmt\Use_::TYPE_CONSTANT:
-                    $this->useConstant[$alias] = $name;
+                    $this->useConstant->add($name, $use->alias);
                     break;
                 case Node\Stmt\Use_::TYPE_FUNCTION:
-                    $this->useFunction[$alias] = $name;
+                    $this->useFunction->add($name, $use->alias);
                     break;
                 case Node\Stmt\Use_::TYPE_NORMAL:
-                    $this->useClass[$alias] = $name;
+                    $this->useClass->add($name, $use->alias);
                     break;
                 default:
                     throw new \Exception('Invalid use type: ' . $type);
@@ -735,7 +811,7 @@ class Parser {
     private function parseExpr(Node\Expr $node):Expr {
         if ($node instanceof Node\Expr\Variable) {
             return new Variable($this->parseExprString($node->name));
-        } else if ($node instanceof Node\Expr\ConstFetch) {
+        } elseif ($node instanceof Node\Expr\ConstFetch) {
             $name = $this->resolveConst($node->name);
             switch (strtolower($name)) {
                 case 'true':
@@ -747,17 +823,17 @@ class Parser {
                 default:
                     return new ConstFetch($name);
             }
-        } else if ($node instanceof Node\Expr\Assign) {
+        } elseif ($node instanceof Node\Expr\Assign) {
             return new BinOp(
                 $this->parseExpr($node->var),
                 BinOp::ASSIGN,
                 $this->parseExpr($node->expr)
             );
-        } else if ($node instanceof Node\Scalar\LNumber) {
+        } elseif ($node instanceof Node\Scalar\LNumber) {
             return new Literal($node->value);
-        } else if ($node instanceof Node\Scalar\DNumber) {
+        } elseif ($node instanceof Node\Scalar\DNumber) {
             return new Literal($node->value);
-        } else if ($node instanceof Node\Expr\Include_) {
+        } elseif ($node instanceof Node\Expr\Include_) {
             switch ($node->type) {
                 case Node\Expr\Include_::TYPE_INCLUDE:
                     $require = false;
@@ -780,32 +856,32 @@ class Parser {
             }
 
             return new Include_($this->parseExpr($node->expr), $require, $once);
-        } else if ($node instanceof Node\Expr\BinaryOp\Concat) {
+        } elseif ($node instanceof Node\Expr\BinaryOp\Concat) {
             return new BinOp(
                 $this->parseExpr($node->left),
                 BinOp::CONCAT,
                 $this->parseExpr($node->right)
             );
-        } else if ($node instanceof Node\Scalar\MagicConst) {
+        } elseif ($node instanceof Node\Scalar\MagicConst) {
             $type = $node->getName();
             $line = $node->getAttribute('startLine');
             return new MagicConst($type, $this->getMagicConstValue($type, $line));
-        } else if ($node instanceof Node\Scalar\String_) {
+        } elseif ($node instanceof Node\Scalar\String_) {
             return new Literal($node->value);
-        } else if ($node instanceof Node\Expr\StaticCall) {
+        } elseif ($node instanceof Node\Expr\StaticCall) {
             return new StaticCall(
                 $this->parseArgs($node->args),
                 $this->parseExprClass($node->class),
                 $this->parseExprString($node->name)
             );
-        } else if ($node instanceof Node\Expr\FuncCall) {
+        } elseif ($node instanceof Node\Expr\FuncCall) {
             $function = $node->name;
             $function = $function instanceof Node\Name
                 ? new Literal($this->resolveFunction($function))
                 : $this->parseExpr($function);
 
             return new FunctionCall($function, $this->parseArgs($node->args));
-        } else if ($node instanceof Node\Expr\Array_) {
+        } elseif ($node instanceof Node\Expr\Array_) {
             $items = [];
             foreach ($node->items as $item) {
                 $items[] = new ArrayItem(
@@ -815,20 +891,20 @@ class Parser {
                 );
             }
             return new Array_($items);
-        } else if ($node instanceof Node\Expr\Empty_) {
+        } elseif ($node instanceof Node\Expr\Empty_) {
             return new UnOp(UnOp::EMPTY, $this->parseExpr($node->expr));
-        } else if ($node instanceof Node\Expr\ArrayDimFetch) {
+        } elseif ($node instanceof Node\Expr\ArrayDimFetch) {
             return new ArrayAccess(
                 $this->parseExpr($node->var),
                 $this->parseExprNull($node->dim)
             );
-        } else if ($node instanceof Node\Expr\MethodCall) {
+        } elseif ($node instanceof Node\Expr\MethodCall) {
             return new MethodCall(
                 $this->parseArgs($node->args),
                 $this->parseExpr($node->var),
                 $this->parseExprString($node->name)
             );
-        } else if ($node instanceof Node\Expr\New_) {
+        } elseif ($node instanceof Node\Expr\New_) {
             $class = $node->class;
             if ($class instanceof Node\Stmt\Class_) {
                 $class   = new Class_(
@@ -842,11 +918,11 @@ class Parser {
             }
 
             return new New_($class, $this->parseArgs($node->args));
-        } else if ($node instanceof Node\Expr\BooleanNot) {
+        } elseif ($node instanceof Node\Expr\BooleanNot) {
             return new UnOp(UnOp::BOOL_NOT, $this->parseExpr($node->expr));
-        } else if ($node instanceof Node\Expr\Print_) {
+        } elseif ($node instanceof Node\Expr\Print_) {
             return new UnOp(UnOp::PRINT, $this->parseExpr($node->expr));
-        } else if ($node instanceof Node\Expr\Closure) {
+        } elseif ($node instanceof Node\Expr\Closure) {
             $uses = [];
             foreach ($node->uses as $use) {
                 $uses[] = new ClosureUse($use->var, $use->byRef);
@@ -857,27 +933,27 @@ class Parser {
                 $uses,
                 $this->parseStmts($node->stmts)
             );
-        } else if ($node instanceof Node\Expr\Ternary) {
+        } elseif ($node instanceof Node\Expr\Ternary) {
             return new Ternary(
                 $this->parseExpr($node->cond),
                 $this->parseExprNull($node->if),
                 $this->parseExpr($node->else)
             );
-        } else if ($node instanceof Node\Scalar\EncapsedStringPart) {
+        } elseif ($node instanceof Node\Scalar\EncapsedStringPart) {
             return new Literal($node->value);
-        } else if ($node instanceof Node\Scalar\Encapsed) {
+        } elseif ($node instanceof Node\Scalar\Encapsed) {
             $exprs = [];
             foreach ($node->parts as $part) {
                 $exprs[] = $this->parseExpr($part);
             }
             return new ConcatMany($exprs);
-        } else if ($node instanceof Node\Expr\StaticPropertyFetch) {
+        } elseif ($node instanceof Node\Expr\StaticPropertyFetch) {
             $class = $node->class;
             $prop  = $node->name;
 
             if ($class instanceof Node\Name) {
                 $class = new Literal($this->resolveClass($class));
-            } else if ($class instanceof Node\Expr) {
+            } elseif ($class instanceof Node\Expr) {
                 $class = $this->parseExpr($class);
             } else {
                 throw new \Exception('huh?');
@@ -885,77 +961,77 @@ class Parser {
 
             if (is_string($prop)) {
                 $prop = new Literal($prop);
-            } else if ($prop instanceof Node\Expr) {
+            } elseif ($prop instanceof Node\Expr) {
                 $prop = $this->parseExpr($prop);
             } else {
                 throw new \Exception('huh?');
             }
 
             return new StaticPropertyAccess($class, $prop);
-        } else if ($node instanceof Node\Expr\Isset_) {
+        } elseif ($node instanceof Node\Expr\Isset_) {
             return new Isset_($this->parseExprs($node->vars));
-        } else if ($node instanceof Node\Expr\BinaryOp) {
+        } elseif ($node instanceof Node\Expr\BinaryOp) {
             return $this->parseBinaryOp($node);
-        } else if ($node instanceof Node\Expr\AssignOp) {
+        } elseif ($node instanceof Node\Expr\AssignOp) {
             return $this->parseAssignOp($node);
-        } else if ($node instanceof Node\Expr\ErrorSuppress) {
+        } elseif ($node instanceof Node\Expr\ErrorSuppress) {
             return new UnOp(UnOp::SUPPRESS, $this->parseExpr($node->expr));
-        } else if ($node instanceof Node\Expr\PropertyFetch) {
+        } elseif ($node instanceof Node\Expr\PropertyFetch) {
             return new PropertyAccess(
                 $this->parseExpr($node->var),
                 $this->parseExprString($node->name)
             );
-        } else if ($node instanceof Node\Expr\Exit_) {
+        } elseif ($node instanceof Node\Expr\Exit_) {
             return new Exit_($this->parseExprNull($node->expr));
-        } else if ($node instanceof Node\Expr\Eval_) {
+        } elseif ($node instanceof Node\Expr\Eval_) {
             return new UnOp(UnOp::EVAL, $this->parseExpr($node->expr));
-        } else if ($node instanceof Node\Expr\Cast) {
+        } elseif ($node instanceof Node\Expr\Cast) {
             return $this->parseCast($node);
-        } else if ($node instanceof Node\Expr\Instanceof_) {
+        } elseif ($node instanceof Node\Expr\Instanceof_) {
             return new BinOp(
                 $this->parseExpr($node->expr),
                 BinOp:: INSTANCEOF,
                 $this->parseExprClass($node->class)
             );
-        } else if ($node instanceof Node\Expr\Clone_) {
+        } elseif ($node instanceof Node\Expr\Clone_) {
             return new UnOp(UnOp::CLONE, $this->parseExpr($node->expr));
-        } else if ($node instanceof Node\Expr\Yield_) {
+        } elseif ($node instanceof Node\Expr\Yield_) {
             return new Yield_(
                 $this->parseExprNull($node->key),
                 $this->parseExprNull($node->value)
             );
-        } else if ($node instanceof Node\Expr\ClassConstFetch) {
+        } elseif ($node instanceof Node\Expr\ClassConstFetch) {
             return new ClassConstFetch(
                 $this->parseExprClass($node->class),
                 $node->name
             );
-        } else if ($node instanceof Node\Expr\UnaryMinus) {
+        } elseif ($node instanceof Node\Expr\UnaryMinus) {
             return new UnOp(UnOp::NEGATE, $this->parseExpr($node->expr));
-        } else if ($node instanceof Node\Expr\UnaryPlus) {
+        } elseif ($node instanceof Node\Expr\UnaryPlus) {
             return new UnOp(UnOp::PLUS, $this->parseExpr($node->expr));
-        } else if ($node instanceof Node\Expr\PostInc) {
+        } elseif ($node instanceof Node\Expr\PostInc) {
             return new UnOp(UnOp::POST_INC, $this->parseExpr($node->var));
-        } else if ($node instanceof Node\Expr\PreInc) {
+        } elseif ($node instanceof Node\Expr\PreInc) {
             return new UnOp(UnOp::PRE_INC, $this->parseExpr($node->var));
-        } else if ($node instanceof Node\Expr\PostDec) {
+        } elseif ($node instanceof Node\Expr\PostDec) {
             return new UnOp(UnOp::POST_DEC, $this->parseExpr($node->var));
-        } else if ($node instanceof Node\Expr\PreDec) {
+        } elseif ($node instanceof Node\Expr\PreDec) {
             return new UnOp(UnOp::PRE_DEC, $this->parseExpr($node->var));
-        } else if ($node instanceof Node\Expr\List_) {
+        } elseif ($node instanceof Node\Expr\List_) {
             $exprs = [];
             foreach ($node->vars as $v) {
                 $exprs[] = $this->parseExprNull($v);
             }
             return new List_($exprs);
-        } else if ($node instanceof Node\Expr\AssignRef) {
+        } elseif ($node instanceof Node\Expr\AssignRef) {
             return new BinOp(
                 $this->parseExpr($node->var),
                 BinOp::ASSIGN_REF,
                 $this->parseExpr($node->expr)
             );
-        } else if ($node instanceof Node\Expr\BitwiseNot) {
+        } elseif ($node instanceof Node\Expr\BitwiseNot) {
             return new UnOp(UnOp::BIT_NOT, $this->parseExpr($node->expr));
-        } else if ($node instanceof Node\Expr\ShellExec) {
+        } elseif ($node instanceof Node\Expr\ShellExec) {
             $exprs = [];
             foreach ($node->parts as $part) {
                 $exprs[] = $this->parseExpr($part);
@@ -969,17 +1045,17 @@ class Parser {
     private function parseCast(Node\Expr\Cast $node):Expr {
         if ($node instanceof Node\Expr\Cast\Array_) {
             $type = Cast::ARRAY;
-        } else if ($node instanceof Node\Expr\Cast\Bool_) {
+        } elseif ($node instanceof Node\Expr\Cast\Bool_) {
             $type = Cast::BOOL;
-        } else if ($node instanceof Node\Expr\Cast\Double) {
+        } elseif ($node instanceof Node\Expr\Cast\Double) {
             $type = Cast::FLOAT;
-        } else if ($node instanceof Node\Expr\Cast\Int_) {
+        } elseif ($node instanceof Node\Expr\Cast\Int_) {
             $type = Cast::INT;
-        } else if ($node instanceof Node\Expr\Cast\Object_) {
+        } elseif ($node instanceof Node\Expr\Cast\Object_) {
             $type = Cast::OBJECT;
-        } else if ($node instanceof Node\Expr\Cast\String_) {
+        } elseif ($node instanceof Node\Expr\Cast\String_) {
             $type = Cast::STRING;
-        } else if ($node instanceof Node\Expr\Cast\Unset_) {
+        } elseif ($node instanceof Node\Expr\Cast\Unset_) {
             $type = Cast::UNSET;
         } else {
             throw new \Exception('Unknown cast type: ' . get_class($node));
@@ -991,27 +1067,27 @@ class Parser {
     private function parseAssignOp(Node\Expr\AssignOp $node):Expr {
         if ($node instanceof Node\Expr\AssignOp\BitwiseAnd) {
             $type = BinOp::ASSIGN_BIT_AND;
-        } else if ($node instanceof Node\Expr\AssignOp\BitwiseOr) {
+        } elseif ($node instanceof Node\Expr\AssignOp\BitwiseOr) {
             $type = BinOp::ASSIGN_BIT_OR;
-        } else if ($node instanceof Node\Expr\AssignOp\BitwiseXor) {
+        } elseif ($node instanceof Node\Expr\AssignOp\BitwiseXor) {
             $type = BinOp::ASSIGN_BIT_XOR;
-        } else if ($node instanceof Node\Expr\AssignOp\Concat) {
+        } elseif ($node instanceof Node\Expr\AssignOp\Concat) {
             $type = BinOp::ASSIGN_CONCAT;
-        } else if ($node instanceof Node\Expr\AssignOp\Div) {
+        } elseif ($node instanceof Node\Expr\AssignOp\Div) {
             $type = BinOp::ASSIGN_DIVIDE;
-        } else if ($node instanceof Node\Expr\AssignOp\Minus) {
+        } elseif ($node instanceof Node\Expr\AssignOp\Minus) {
             $type = BinOp::ASSIGN_SUBTRACT;
-        } else if ($node instanceof Node\Expr\AssignOp\Mod) {
+        } elseif ($node instanceof Node\Expr\AssignOp\Mod) {
             $type = BinOp::ASSIGN_MODULUS;
-        } else if ($node instanceof Node\Expr\AssignOp\Mul) {
+        } elseif ($node instanceof Node\Expr\AssignOp\Mul) {
             $type = BinOp::ASSIGN_MULTIPLY;
-        } else if ($node instanceof Node\Expr\AssignOp\Plus) {
+        } elseif ($node instanceof Node\Expr\AssignOp\Plus) {
             $type = BinOp::ASSIGN_ADD;
-        } else if ($node instanceof Node\Expr\AssignOp\Pow) {
+        } elseif ($node instanceof Node\Expr\AssignOp\Pow) {
             $type = BinOp::ASSIGN_EXPONENT;
-        } else if ($node instanceof Node\Expr\AssignOp\ShiftLeft) {
+        } elseif ($node instanceof Node\Expr\AssignOp\ShiftLeft) {
             $type = BinOp::ASSIGN_SHIFT_LEFT;
-        } else if ($node instanceof Node\Expr\AssignOp\ShiftRight) {
+        } elseif ($node instanceof Node\Expr\AssignOp\ShiftRight) {
             $type = BinOp::ASSIGN_SHIFT_RIGHT;
         } else {
             throw new \Exception('Unhandled assignment operator: ' . get_class($node));
@@ -1025,57 +1101,57 @@ class Parser {
     private function parseBinaryOp(Node\Expr\BinaryOp $node):Expr {
         if ($node instanceof Node\Expr\BinaryOp\BitwiseAnd) {
             $type = BinOp::BIT_AND;
-        } else if ($node instanceof Node\Expr\BinaryOp\BitwiseOr) {
+        } elseif ($node instanceof Node\Expr\BinaryOp\BitwiseOr) {
             $type = BinOp::BIT_OR;
-        } else if ($node instanceof Node\Expr\BinaryOp\BitwiseXor) {
+        } elseif ($node instanceof Node\Expr\BinaryOp\BitwiseXor) {
             $type = BinOp::BIT_XOR;
-        } else if ($node instanceof Node\Expr\BinaryOp\BooleanAnd) {
+        } elseif ($node instanceof Node\Expr\BinaryOp\BooleanAnd) {
             $type = BinOp::BOOl_AND;
-        } else if ($node instanceof Node\Expr\BinaryOp\BooleanOr) {
+        } elseif ($node instanceof Node\Expr\BinaryOp\BooleanOr) {
             $type = BinOp::BOOl_OR;
-        } else if ($node instanceof Node\Expr\BinaryOp\Coalesce) {
+        } elseif ($node instanceof Node\Expr\BinaryOp\Coalesce) {
             $type = BinOp::COALESCE;
-        } else if ($node instanceof Node\Expr\BinaryOp\Concat) {
+        } elseif ($node instanceof Node\Expr\BinaryOp\Concat) {
             $type = BinOp::CONCAT;
-        } else if ($node instanceof Node\Expr\BinaryOp\Div) {
+        } elseif ($node instanceof Node\Expr\BinaryOp\Div) {
             $type = BinOp::DIVIDE;
-        } else if ($node instanceof Node\Expr\BinaryOp\Equal) {
+        } elseif ($node instanceof Node\Expr\BinaryOp\Equal) {
             $type = BinOp::EQUAL;
-        } else if ($node instanceof Node\Expr\BinaryOp\Greater) {
+        } elseif ($node instanceof Node\Expr\BinaryOp\Greater) {
             $type = BinOp::GREATER;
-        } else if ($node instanceof Node\Expr\BinaryOp\GreaterOrEqual) {
+        } elseif ($node instanceof Node\Expr\BinaryOp\GreaterOrEqual) {
             $type = BinOp::GREATER_OR_EQUAL;
-        } else if ($node instanceof Node\Expr\BinaryOp\Identical) {
+        } elseif ($node instanceof Node\Expr\BinaryOp\Identical) {
             $type = BinOp::IDENTICAL;
-        } else if ($node instanceof Node\Expr\BinaryOp\LogicalAnd) {
+        } elseif ($node instanceof Node\Expr\BinaryOp\LogicalAnd) {
             $type = BinOp::LOGIC_AND;
-        } else if ($node instanceof Node\Expr\BinaryOp\LogicalOr) {
+        } elseif ($node instanceof Node\Expr\BinaryOp\LogicalOr) {
             $type = BinOp::LOGIC_OR;
-        } else if ($node instanceof Node\Expr\BinaryOp\LogicalXor) {
+        } elseif ($node instanceof Node\Expr\BinaryOp\LogicalXor) {
             $type = BinOp::LOGIC_XOR;
-        } else if ($node instanceof Node\Expr\BinaryOp\Minus) {
+        } elseif ($node instanceof Node\Expr\BinaryOp\Minus) {
             $type = BinOp::SUBTRACT;
-        } else if ($node instanceof Node\Expr\BinaryOp\Mod) {
+        } elseif ($node instanceof Node\Expr\BinaryOp\Mod) {
             $type = BinOp::MODULUS;
-        } else if ($node instanceof Node\Expr\BinaryOp\Mul) {
+        } elseif ($node instanceof Node\Expr\BinaryOp\Mul) {
             $type = BinOp::MULTIPLY;
-        } else if ($node instanceof Node\Expr\BinaryOp\NotEqual) {
+        } elseif ($node instanceof Node\Expr\BinaryOp\NotEqual) {
             $type = BinOp::NOT_EQUAL;
-        } else if ($node instanceof Node\Expr\BinaryOp\NotIdentical) {
+        } elseif ($node instanceof Node\Expr\BinaryOp\NotIdentical) {
             $type = BinOp::NOT_IDENTICAL;
-        } else if ($node instanceof Node\Expr\BinaryOp\Plus) {
+        } elseif ($node instanceof Node\Expr\BinaryOp\Plus) {
             $type = BinOp::ADD;
-        } else if ($node instanceof Node\Expr\BinaryOp\Pow) {
+        } elseif ($node instanceof Node\Expr\BinaryOp\Pow) {
             $type = BinOp::EXPONENT;
-        } else if ($node instanceof Node\Expr\BinaryOp\ShiftLeft) {
+        } elseif ($node instanceof Node\Expr\BinaryOp\ShiftLeft) {
             $type = BinOp::SHIFT_LEFT;
-        } else if ($node instanceof Node\Expr\BinaryOp\ShiftRight) {
+        } elseif ($node instanceof Node\Expr\BinaryOp\ShiftRight) {
             $type = BinOp::SHIFT_RIGHT;
-        } else if ($node instanceof Node\Expr\BinaryOp\Smaller) {
+        } elseif ($node instanceof Node\Expr\BinaryOp\Smaller) {
             $type = BinOp::LESS;
-        } else if ($node instanceof Node\Expr\BinaryOp\SmallerOrEqual) {
+        } elseif ($node instanceof Node\Expr\BinaryOp\SmallerOrEqual) {
             $type = BinOp::LESS_OR_EQUAL;
-        } else if ($node instanceof Node\Expr\BinaryOp\Spaceship) {
+        } elseif ($node instanceof Node\Expr\BinaryOp\Spaceship) {
             $type = BinOp::SPACESHIP;
         } else {
             throw new \Exception('Unhandled binary operator: ' . get_class($node));
@@ -1235,7 +1311,10 @@ class ConstFetch extends Expr {
     /** @var string */
     private $name;
 
-    public function __construct(string $name) {
+    /**
+     * @param string $name
+     */
+    public function __construct($name) {
         $this->name = $name;
     }
 }
@@ -2339,5 +2418,20 @@ class ShellExec extends Expr {
      */
     public function __construct(array $parts) {
         $this->parts = $parts;
+    }
+}
+
+/**
+ * Foo\Bar::class
+ */
+class ClassName extends Expr {
+    /** @var string */
+    private $class;
+
+    /**
+     * @param string $class
+     */
+    public function __construct($class) {
+        $this->class = $class;
     }
 }

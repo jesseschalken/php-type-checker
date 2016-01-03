@@ -4,8 +4,8 @@
         "Read more about it at https://getcomposer.org/doc/01-basic-usage.md#composer-lock-the-lock-file",
         "This file is @generated automatically"
     ],
-    "hash": "ea5a0635c9a65a1c9670a016f8856e65",
-    "content-hash": "32d0ee83341a0321c283b1323005bd39",
+    "hash": "37f4080f3ddaeee58f64dc14a4398f08",
+    "content-hash": "60e64f96f7124864e5f0e03545598c92",
     "packages": [
         {
             "name": "docopt/docopt",
@@ -109,16 +109,16 @@
         },
         {
             "name": "jesseschalken/magic-utils",
-            "version": "v0.1",
+            "version": "0.2",
             "source": {
                 "type": "git",
                 "url": "https://github.com/jesseschalken/php-magic-utils.git",
-                "reference": "ec4a651ab92dbeb3439570edf862904a02fbde62"
+                "reference": "2d16479bb0fed0503f3620c13f9bdee473416461"
             },
             "dist": {
                 "type": "zip",
-                "url": "https://api.github.com/repos/jesseschalken/php-magic-utils/zipball/ec4a651ab92dbeb3439570edf862904a02fbde62",
-                "reference": "ec4a651ab92dbeb3439570edf862904a02fbde62",
+                "url": "https://api.github.com/repos/jesseschalken/php-magic-utils/zipball/2d16479bb0fed0503f3620c13f9bdee473416461",
+                "reference": "2d16479bb0fed0503f3620c13f9bdee473416461",
                 "shasum": ""
             },
             "require-dev": {
@@ -144,7 +144,7 @@
                 }
             ],
             "description": "Traits and functions to help with implementing PHP's magic methods",
-            "time": "2015-12-20 12:36:08"
+            "time": "2016-01-03 04:34:14"
         },
         {
             "name": "nikic/php-parser",
@@ -1047,16 +1047,16 @@
         },
         {
             "name": "symfony/yaml",
-            "version": "v3.0.0",
+            "version": "v3.0.1",
             "source": {
                 "type": "git",
                 "url": "https://github.com/symfony/yaml.git",
-                "reference": "177a015cb0e19ff4a49e0e2e2c5fc1c1bee07002"
+                "reference": "3df409958a646dad2bc5046c3fb671ee24a1a691"
             },
             "dist": {
                 "type": "zip",
-                "url": "https://api.github.com/repos/symfony/yaml/zipball/177a015cb0e19ff4a49e0e2e2c5fc1c1bee07002",
-                "reference": "177a015cb0e19ff4a49e0e2e2c5fc1c1bee07002",
+                "url": "https://api.github.com/repos/symfony/yaml/zipball/3df409958a646dad2bc5046c3fb671ee24a1a691",
+                "reference": "3df409958a646dad2bc5046c3fb671ee24a1a691",
                 "shasum": ""
             },
             "require": {
@@ -1092,7 +1092,7 @@
             ],
             "description": "Symfony Yaml Component",
             "homepage": "https://symfony.com",
-            "time": "2015-11-30 12:36:17"
+            "time": "2015-12-26 13:39:53"
         },
         {
             "name": "zendframework/zend-authentication",

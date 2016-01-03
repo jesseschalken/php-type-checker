@@ -3,7 +3,10 @@
 
 namespace JesseSchalken\PhpTypeChecker;
 
+use JesseSchalken\PhpTypeChecker\Node\ErrorReceiver;
+use JesseSchalken\PhpTypeChecker\Node\File;
 use JesseSchalken\PhpTypeChecker\Node\Parser;
+use Zend\Barcode\Object\Error;
 
 require_once __DIR__ . '/../vendor/autoload.php';
 
@@ -54,7 +57,7 @@ s
     }
     $files = array_unique($files);
     sort($files, SORT_STRING);
-    $files = Parser::parseFiles($files);
+    $files = File::parseFiles($files, new ErrorReceiver());
 }
 
 class Project {
