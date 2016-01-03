@@ -405,20 +405,6 @@ class File {
 }
 
 class Parser {
-    /**
-     * @deprecated You should use the line number from the parser node
-     * @var int
-     */
-    public $__LINE__ = '';
-    /** @var string */
-    public $__FUNCTION__ = '';
-    /** @var string */
-    public $__CLASS__ = '';
-    /** @var string */
-    public $__TRAIT__ = '';
-    /** @var string */
-    public $__METHOD__ = '';
-
     /** @var Node\Name */
     private $namespace;
     /** @var Uses */
@@ -427,18 +413,22 @@ class Parser {
     private $useClass;
     /** @var Uses */
     private $useConstant;
-
     /** @var StmtBlock[] */
     private $finallys = [];
-
+    /** @var bool */
     private $returnRef = false;
-
     /** @var GlobalDefinedNames */
     private $globals;
     /** @var DefinedNames */
     private $locals;
     /** @var ParsedFile */
     private $file;
+    /** @var string|null */
+    private $class;
+    /** @var string|null */
+    private $parent;
+    /** @var string|null */
+    private $function;
 
     /**
      * @param ParsedFile         $file
@@ -465,10 +455,34 @@ class Parser {
 
     /**
      * @param Node\Name $name
-     * @return string
+     * @return AbstractClassName
+     * @throws \Exception
      */
-    private function resolveClass(Node\Name $name) {
-        return $this->useClass->resolve($name, $this->useClass)->toString();
+    private function resolveClass(Node\Name $name):AbstractClassName {
+        if (
+            !$name->isFullyQualified() &&
+            !$name->isRelative() &&
+            !$name->isQualified()
+        ) {
+            switch (strtolower($name->getFirst())) {
+                case 'self':
+                    if ($this->class) {
+                        return new ClassName($this->class);
+                    } else {
+                        throw new \Exception('Cannot use "self" outside a class');
+                    }
+                case 'parent':
+                    if ($this->parent) {
+                        return new ClassName($this->parent);
+                    } else {
+                        throw new \Exception('Cannot use "parent" without a parent class');
+                    }
+                case 'static':
+                    return new StaticClassName();
+            }
+        }
+
+        return new ClassName($this->useClass->resolve($name, $this->useClass)->toString());
     }
 
     /**
@@ -545,18 +559,14 @@ class Parser {
             $copy->resetNamespace($node->name);
             return $copy->parseStmts($node->stmts);
         } elseif ($node instanceof Node\Stmt\Class_) {
-            $name = $this->prefixName($node->name);
-            $self = clone $this;
-
-            $self->__TRAIT__ = '';
-            $self->__CLASS__ = $name;
-            return new Class_($name, $self->parseClassMembers($node));
+            return $this->parseClass($node);
         } elseif ($node instanceof Node\Stmt\Function_) {
             $name = $this->prefixName($node->name);
             $self = clone $this;
 
-            $self->__FUNCTION__ = $name;
-            $self->__METHOD__   = $name;
+            $self->function = $name;
+            $self->class    = null;
+            $self->parent   = null;
             return new Function_(
                 $name,
                 $self->parseFunctionType($node),
@@ -566,15 +576,17 @@ class Parser {
             $name = $this->prefixName($node->name);
             $self = clone $this;
 
-            $self->__TRAIT__ = '';
-            $self->__CLASS__ = $name;
+            $self->class    = $name;
+            $self->function = null;
+            $self->parent   = null;
             return new Interface_($name, $self->parseClassMembers($node));
         } elseif ($node instanceof Node\Stmt\Trait_) {
             $name = $this->prefixName($node->name);
             $self = clone $this;
 
-            $self->__TRAIT__ = $name;
-            $self->__CLASS__ = $name;
+            $self->class    = 'TEMPORARY';
+            $self->function = null;
+            $self->parent   = 'TEMPORARY';
             return new Trait_($name, $self->parseClassMembers($node));
         } elseif ($node instanceof Node\Stmt\Use_) {
             $this->addUses($node->uses, $node->type);
@@ -804,7 +816,7 @@ class Parser {
      */
     private function parseExprClass($node) {
         return $node instanceof Node\Name
-            ? new Literal($this->resolveClass($node))
+            ? $this->resolveClass($node)
             : $this->parseExpr($node);
     }
 
@@ -907,10 +919,7 @@ class Parser {
         } elseif ($node instanceof Node\Expr\New_) {
             $class = $node->class;
             if ($class instanceof Node\Stmt\Class_) {
-                $class   = new Class_(
-                    $this->globals->classes->create($this->prefixName('class')),
-                    $this->parseClassMembers($class)
-                );
+                $class   = $this->parseClass($class, $this->globals->classes->create($this->prefixName('class')));
                 $stmts[] = $class;
                 $class   = new Literal($class->name());
             } else {
@@ -952,7 +961,7 @@ class Parser {
             $prop  = $node->name;
 
             if ($class instanceof Node\Name) {
-                $class = new Literal($this->resolveClass($class));
+                $class = $this->resolveClass($class);
             } elseif ($class instanceof Node\Expr) {
                 $class = $this->parseExpr($class);
             } else {
@@ -1177,13 +1186,13 @@ class Parser {
             case MagicConst::DIR:
                 return dirname(realpath($this->file->path));
             case MagicConst::FUNCTION:
-                return $this->__FUNCTION__;
+                return (string)$this->function;
             case MagicConst::CLASS_:
-                return $this->__CLASS__;
+                return (string)$this->class;
             case MagicConst::TRAIT:
-                return $this->__TRAIT__;
+                return (string)$this->class;
             case MagicConst::METHOD:
-                return $this->__METHOD__;
+                return $this->class ? "$this->class::$this->function" : "$this->function";
             case MagicConst::NAMESPACE:
                 return $this->namespace->toString();
             default:
@@ -1219,7 +1228,7 @@ class Parser {
             $catches = [];
             foreach ($node->catches as $catch) {
                 $catches[] = new Catch_(
-                    $this->resolveClass($catch->type),
+                    $this->resolveClass($catch->type)->toString(),
                     $catch->var,
                     $this->parseStmts($catch->stmts)
                 );
@@ -1228,6 +1237,27 @@ class Parser {
         }
 
         return $result;
+    }
+
+    private function parseClass(Node\Stmt\Class_ $node, $name = null):Class_ {
+        $name       = $name ?: $this->prefixName($node->name);
+        $parent     = $node->extends ? $this->resolveClass($node->extends)->toString() : null;
+        $implements = [];
+        foreach ($node->implements as $impl) {
+            $implements[] = $this->resolveClass($impl)->toString();
+        }
+
+        $self = clone $this;
+
+        $self->class    = $name;
+        $self->function = null;
+        $self->parent   = $parent;
+        return new Class_(
+            $name,
+            $self->parseClassMembers($node),
+            $parent,
+            $implements
+        );
     }
 }
 
@@ -1568,12 +1598,6 @@ class CallArg {
     }
 }
 
-/**
- * static::name
- */
-class Static_ extends Expr {
-}
-
 class Visibility {
     const PUBLIC    = 'public';
     const PROTECTED = 'protected';
@@ -1626,10 +1650,22 @@ class Not_ extends Expr {
 class Class_ extends Classish {
     /** @var ClassMember */
     private $members = [];
+    /** @var string|null */
+    private $parent;
+    /** @var string[] */
+    private $implements;
 
-    public function __construct($name, array $members) {
+    /**
+     * @param string        $name
+     * @param ClassMember[] $members
+     * @param string|null   $parent
+     * @param string[]      $implements
+     */
+    public function __construct($name, array $members, $parent = null, array $implements = []) {
         parent::__construct($name);
-        $this->members = $members;
+        $this->members    = $members;
+        $this->parent     = $parent;
+        $this->implements = $implements;
     }
 
     public function makeAnonymous():Expr {
@@ -2129,10 +2165,6 @@ class UnOp extends Expr {
     }
 }
 
-class Exec extends Expr {
-
-}
-
 class InlineHTML extends Expr {
     /** @var string */
     private $html;
@@ -2421,10 +2453,18 @@ class ShellExec extends Expr {
     }
 }
 
+abstract class AbstractClassName extends Expr {
+    /**
+     * @param string|null $static
+     * @return string
+     */
+    public abstract function toString($static = null);
+}
+
 /**
  * Foo\Bar::class
  */
-class ClassName extends Expr {
+class ClassName extends AbstractClassName {
     /** @var string */
     private $class;
 
@@ -2434,4 +2474,22 @@ class ClassName extends Expr {
     public function __construct($class) {
         $this->class = $class;
     }
+
+    public function toString($static = null) {
+        return $this->class;
+    }
 }
+
+/**
+ * static::name
+ */
+class StaticClassName extends AbstractClassName {
+    public function toString($static = null) {
+        if ($static === null) {
+            throw new \Exception('"static" used in disallowed context');
+        } else {
+            return $static;
+        }
+    }
+}
+
