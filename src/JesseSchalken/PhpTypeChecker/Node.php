@@ -30,13 +30,13 @@ namespace JesseSchalken\PhpTypeChecker\Node {
          * @param string $message
          * @return string
          */
-        function format($message) {
+        public function format($message) {
             return "$this->path($this->line,$this->column): $message\n";
         }
     }
 
     class ErrorReceiver {
-        function add($message, CodeLoc $loc) {
+        public function add($message, CodeLoc $loc) {
             print $loc->format($message);
         }
     }
@@ -47,7 +47,7 @@ namespace JesseSchalken\PhpTypeChecker\Node {
          * @param ErrorReceiver $errors
          * @return File[]
          */
-        static function parse(array $paths, ErrorReceiver $errors):array {
+        public static function parse(array $paths, ErrorReceiver $errors):array {
             /**
              * @var Parser\ParsedFile[] $parsed
              * @var self[]              $result
@@ -1368,12 +1368,12 @@ namespace JesseSchalken\PhpTypeChecker\Node\Stmt {
         /**
          * @return SingleStmt[]
          */
-        abstract function split():array;
+        public abstract function split():array;
 
         /**
          * @return Stmt[]
          */
-        abstract function subStmts():array;
+        public abstract function subStmts():array;
 
         public function namespaces():array {
             $namespaces = [];
@@ -1384,6 +1384,11 @@ namespace JesseSchalken\PhpTypeChecker\Node\Stmt {
             }
             return array_unique($namespaces);
         }
+
+        /**
+         * @return \PhpParser\Node[]
+         */
+        public abstract function unparse():array;
     }
 
     final class Block extends Stmt {
@@ -1411,21 +1416,24 @@ namespace JesseSchalken\PhpTypeChecker\Node\Stmt {
             $this->stmts[] = $stmt;
         }
 
-        function subStmts():array {
+        public function subStmts():array {
             return $this->stmts;
+        }
+
+        public function unparse():array {
+            $nodes = [];
+            foreach ($this->stmts as $stmt) {
+                foreach ($stmt->unparse() as $node) {
+                    $nodes[] = $node;
+                }
+            }
+            return $nodes;
         }
     }
 
     abstract class SingleStmt extends Stmt {
-        final function split():array {
+        public final function split():array {
             return [$this];
-        }
-
-        /**
-         * @return \PhpParser\Node[]
-         */
-        public function unparse():array {
-            return [];
         }
     }
 
@@ -1444,8 +1452,15 @@ namespace JesseSchalken\PhpTypeChecker\Node\Stmt {
             $this->cond = $cond;
         }
 
-        function subStmts():array {
+        public function subStmts():array {
             return [$this->body, $this->cond];
+        }
+
+        public function unparse():array {
+            return [new \PhpParser\Node\Stmt\While_(
+                $this->cond->unparse_(),
+                $this->body->unparse()
+            )];
         }
     }
 
@@ -1463,8 +1478,36 @@ namespace JesseSchalken\PhpTypeChecker\Node\Stmt {
             $this->false = $false;
         }
 
-        function subStmts():array {
+        public function subStmts():array {
             return [$this->cond, $this->true, $this->false];
+        }
+
+        public function unparse():array {
+            $elseIfs = [];
+            $else    = $this->false->unparse();
+
+            if (count($else) == 1) {
+                $if_ = $else[0];
+                if ($if_ instanceof \PhpParser\Node\Stmt\If_) {
+                    $elseIfs = array_merge(
+                        [new \PhpParser\Node\Stmt\ElseIf_(
+                            $if_->cond,
+                            $if_->stmts
+                        )],
+                        $if_->elseifs
+                    );
+                    $else    = $if_->else;
+                }
+            }
+
+            return [new \PhpParser\Node\Stmt\If_(
+                $this->cond->unparse_(),
+                [
+                    'stmts'   => $this->true->unparse(),
+                    'elseifs' => $elseIfs,
+                    'else'    => $else,
+                ]
+            )];
         }
     }
 
@@ -1476,8 +1519,12 @@ namespace JesseSchalken\PhpTypeChecker\Node\Stmt {
             $this->expr = $expr;
         }
 
-        function subStmts():array {
+        public function subStmts():array {
             return $this->expr ? [$this->expr] : [];
+        }
+
+        public function unparse():array {
+            return [new \PhpParser\Node\Stmt\Return_($this->expr ? $this->expr->unparse_() : null)];
         }
     }
 
@@ -1498,8 +1545,12 @@ namespace JesseSchalken\PhpTypeChecker\Node\Stmt {
             $this->html = $html;
         }
 
-        function subStmts():array {
+        public function subStmts():array {
             return [];
+        }
+
+        public function unparse():array {
+            return [new \PhpParser\Node\Stmt\InlineHTML($this->html)];
         }
     }
 
@@ -1509,20 +1560,20 @@ namespace JesseSchalken\PhpTypeChecker\Node\Stmt {
         /**
          * @param string $name
          */
-        function __construct($name) {
+        public function __construct($name) {
             $this->name = $name;
         }
 
-        function name() {
+        public function name() {
             return $this->name;
         }
 
         /**
          * @return ClassMember[]
          */
-        abstract function members();
+        public abstract function members();
 
-        function subStmts():array {
+        public function subStmts():array {
             $stmts = [];
             foreach ($this->members() as $member) {
                 foreach ($member->subStmts() as $stmt) {
@@ -1550,8 +1601,12 @@ namespace JesseSchalken\PhpTypeChecker\Node\Stmt {
             $this->members = $members;
         }
 
-        function members() {
+        public function members() {
             return $this->members;
+        }
+
+        public function unparse():array {
+            return [];
         }
     }
 
@@ -1578,7 +1633,7 @@ namespace JesseSchalken\PhpTypeChecker\Node\Stmt {
 
         public function makeAnonymous():Expr\Expr {
             return new If_(
-                new Expr\Not_(new Expr\FunctionCall(new Expr\Literal('class_exists'), [
+                new Expr\UnOp(Expr\UnOp::BOOL_NOT, new Expr\FunctionCall(new Expr\Literal('class_exists'), [
                     new Expr\CallArg(new Expr\Literal($this->name()), false, false),
                     new Expr\CallArg(new Expr\Literal(false), false, false),
                 ])),
@@ -1587,8 +1642,14 @@ namespace JesseSchalken\PhpTypeChecker\Node\Stmt {
             );
         }
 
-        function members() {
+        public function members() {
             return $this->members;
+        }
+
+        public function unparse():array {
+            return [new \PhpParser\Node\Stmt\Class_(
+                $this->name()
+            )];
         }
     }
 
@@ -1607,6 +1668,12 @@ namespace JesseSchalken\PhpTypeChecker\Node\Stmt {
 
         public function members() {
             return $this->methods;
+        }
+
+        public function unparse():array {
+            return [new \PhpParser\Node\Stmt\Interface_(
+                $this->name()
+            )];
         }
     }
 
@@ -1638,7 +1705,7 @@ namespace JesseSchalken\PhpTypeChecker\Node\Stmt {
             $this->body = $body;
         }
 
-        function subStmts():array {
+        public function subStmts():array {
             $stmts = $this->type->subStmts();
             if ($this->body) {
                 $stmts[] = $this->body;
@@ -1648,6 +1715,15 @@ namespace JesseSchalken\PhpTypeChecker\Node\Stmt {
 
         public function namespaces():array {
             return array_merge(parent::namespaces(), [extract_namespace($this->name)]);
+        }
+
+        public function unparse():array {
+            return [new \PhpParser\Node\Stmt\Function_(
+                $this->name,
+                array_replace($this->type->unparseAttributes(), [
+                    'stmts' => $this->body->unparse(),
+                ])
+            )];
         }
     }
 
@@ -1728,6 +1804,18 @@ namespace JesseSchalken\PhpTypeChecker\Node\Stmt {
             }
             return $stmts;
         }
+
+        public function unparseAttributes():array {
+            $params = [];
+            foreach ($this->params as $param) {
+                $params[] = $param->unparse();
+            }
+            return [
+                'byRef'      => $this->returnRef,
+                'params'     => $params,
+                'returnType' => $this->returnType->unparse(),
+            ];
+        }
     }
 
     class Method_ extends ClassMember {
@@ -1782,6 +1870,8 @@ namespace JesseSchalken\PhpTypeChecker\Node\Stmt {
         private $passByRef;
         /** @var bool */
         private $variadic;
+        /** @var Type\Type */
+        private $type;
 
         /**
          * @param string         $name
@@ -1798,6 +1888,16 @@ namespace JesseSchalken\PhpTypeChecker\Node\Stmt {
 
         public function subStmts() {
             return $this->default ? [$this->default] : [];
+        }
+
+        public function unparse():\PhpParser\Node\Param {
+            return new \PhpParser\Node\Param(
+                $this->name,
+                $this->default ? $this->default->unparse_() : null,
+                $this->type->unparse(),
+                $this->passByRef,
+                $this->variadic
+            );
         }
     }
 
@@ -1828,7 +1928,7 @@ namespace JesseSchalken\PhpTypeChecker\Node\Stmt {
             $this->byRef = $byRef;
         }
 
-        function subStmts():array {
+        public function subStmts():array {
             $stmts = [
                 $this->array,
                 $this->value,
@@ -1838,6 +1938,18 @@ namespace JesseSchalken\PhpTypeChecker\Node\Stmt {
                 $stmts[] = $this->key;
             }
             return $stmts;
+        }
+
+        public function unparse():array {
+            return [new \PhpParser\Node\Stmt\Foreach_(
+                $this->array->unparse_(),
+                $this->value->unparse_(),
+                [
+                    'keyVar' => $this->key ? $this->key->unparse_() : null,
+                    'byRef'  => $this->byRef,
+                    'stmts'  => $this->body->unparse(),
+                ]
+            )];
         }
     }
 
@@ -1852,8 +1964,16 @@ namespace JesseSchalken\PhpTypeChecker\Node\Stmt {
             $this->exprs = $exprs;
         }
 
-        function subStmts():array {
+        public function subStmts():array {
             return $this->exprs;
+        }
+
+        public function unparse():array {
+            $exprs = [];
+            foreach ($this->exprs as $expr) {
+                $exprs[] = $expr->unparse_();
+            }
+            return [new \PhpParser\Node\Stmt\Echo_($exprs)];
         }
     }
 
@@ -1872,12 +1992,21 @@ namespace JesseSchalken\PhpTypeChecker\Node\Stmt {
             $this->value = $value;
         }
 
-        function subStmts():array {
+        public function subStmts():array {
             return [$this->value];
         }
 
         public function namespaces():array {
             return array_merge(parent::namespaces(), [extract_namespace($this->name)]);
+        }
+
+        public function unparse():array {
+            return [new \PhpParser\Node\Stmt\Const_([
+                new \PhpParser\Node\Const_(
+                    $this->name,
+                    $this->value->unparse_()
+                ),
+            ])];
         }
     }
 
@@ -1892,8 +2021,14 @@ namespace JesseSchalken\PhpTypeChecker\Node\Stmt {
             $this->expr = $expr;
         }
 
-        function subStmts():array {
+        public function subStmts():array {
             return [$this->expr];
+        }
+
+        public function unparse():array {
+            return [new \PhpParser\Node\Stmt\Throw_(
+                $this->expr->unparse_()
+            )];
         }
     }
 
@@ -1912,8 +2047,17 @@ namespace JesseSchalken\PhpTypeChecker\Node\Stmt {
             $this->value = $value;
         }
 
-        function subStmts():array {
+        public function subStmts():array {
             return $this->value ? [$this->value] : [];
+        }
+
+        public function unparse():array {
+            return [new \PhpParser\Node\Stmt\Static_([
+                new \PhpParser\Node\Stmt\StaticVar(
+                    $this->name,
+                    $this->value ? $this->value->unparse_() : null
+                ),
+            ])];
         }
     }
 
@@ -1940,13 +2084,34 @@ namespace JesseSchalken\PhpTypeChecker\Node\Stmt {
             $this->body = $body;
         }
 
-        function subStmts():array {
+        public function subStmts():array {
             return array_merge(
                 $this->init,
                 $this->cond,
                 $this->loop,
                 [$this->body]
             );
+        }
+
+        public function unparse():array {
+            $init = [];
+            $cond = [];
+            $loop = [];
+            foreach ($this->init as $expr) {
+                $init[] = $expr->unparse_();
+            }
+            foreach ($this->cond as $expr) {
+                $cond[] = $expr->unparse_();
+            }
+            foreach ($this->loop as $expr) {
+                $loop[] = $expr->unparse_();
+            }
+            return [new \PhpParser\Node\Stmt\For_([
+                'init'  => $init,
+                'cond'  => $cond,
+                'loop'  => $loop,
+                'stmts' => $this->body->unparse(),
+            ])];
         }
     }
 
@@ -1961,8 +2126,15 @@ namespace JesseSchalken\PhpTypeChecker\Node\Stmt {
             $this->levels = $levels;
         }
 
-        function subStmts():array {
+        public function subStmts():array {
             return [];
+        }
+
+        public function unparse():array {
+            $levels = $this->levels == 1
+                ? null
+                : new \PhpParser\Node\Scalar\LNumber($this->levels);
+            return [new \PhpParser\Node\Stmt\Break_($levels)];
         }
     }
 
@@ -1977,8 +2149,15 @@ namespace JesseSchalken\PhpTypeChecker\Node\Stmt {
             $this->levels = $levels;
         }
 
-        function subStmts():array {
+        public function subStmts():array {
             return [];
+        }
+
+        public function unparse():array {
+            $levels = $this->levels == 1
+                ? null
+                : new \PhpParser\Node\Scalar\LNumber($this->levels);
+            return [new \PhpParser\Node\Stmt\Continue_($levels)];
         }
     }
 
@@ -1997,7 +2176,7 @@ namespace JesseSchalken\PhpTypeChecker\Node\Stmt {
             $this->cases = $cases;
         }
 
-        function subStmts():array {
+        public function subStmts():array {
             $stmts = [$this->expr];
             foreach ($this->cases as $case) {
                 foreach ($case->subStmts() as $stmt) {
@@ -2005,6 +2184,17 @@ namespace JesseSchalken\PhpTypeChecker\Node\Stmt {
                 }
             }
             return $stmts;
+        }
+
+        public function unparse():array {
+            $cases = [];
+            foreach ($this->cases as $case) {
+                $cases[] = $case->unparse();
+            }
+            return [new \PhpParser\Node\Stmt\Switch_(
+                $this->expr->unparse_(),
+                $cases
+            )];
         }
     }
 
@@ -2030,6 +2220,13 @@ namespace JesseSchalken\PhpTypeChecker\Node\Stmt {
             }
             return $stmts;
         }
+
+        public function unparse():\PhpParser\Node\Stmt\Case_ {
+            return new \PhpParser\Node\Stmt\Case_(
+                $this->expr ? $this->expr->unparse_() : null,
+                $this->stmt->unparse()
+            );
+        }
     }
 
     class Unset_ extends SingleStmt {
@@ -2043,8 +2240,16 @@ namespace JesseSchalken\PhpTypeChecker\Node\Stmt {
             $this->exprs = $exprs;
         }
 
-        function subStmts():array {
+        public function subStmts():array {
             return $this->exprs;
+        }
+
+        public function unparse():array {
+            $exprs = [];
+            foreach ($this->exprs as $expr) {
+                $exprs[] = $expr->unparse_();
+            }
+            return [new \PhpParser\Node\Stmt\Unset_($exprs)];
         }
     }
 
@@ -2063,8 +2268,15 @@ namespace JesseSchalken\PhpTypeChecker\Node\Stmt {
             $this->body = $body;
         }
 
-        function subStmts():array {
+        public function subStmts():array {
             return [$this->cond, $this->body];
+        }
+
+        public function unparse():array {
+            return [new \PhpParser\Node\Stmt\While_(
+                $this->cond->unparse_(),
+                $this->body->unparse()
+            )];
         }
     }
 
@@ -2083,7 +2295,7 @@ namespace JesseSchalken\PhpTypeChecker\Node\Stmt {
             $this->catches = $catches;
         }
 
-        function subStmts():array {
+        public function subStmts():array {
             $stmts = [$this->body];
             foreach ($this->catches as $catch) {
                 foreach ($catch->subStmts() as $stmt) {
@@ -2091,6 +2303,20 @@ namespace JesseSchalken\PhpTypeChecker\Node\Stmt {
                 }
             }
             return $stmts;
+        }
+
+        public function unparse():array {
+            $body   = $this->body->unparse();
+            $cathes = [];
+            foreach ($this->catches as $catch) {
+                $cathes[] = $catch->unparse();
+            }
+
+            return !$cathes ? $body : [new \PhpParser\Node\Stmt\TryCatch(
+                $body,
+                $cathes,
+                []
+            )];
         }
     }
 
@@ -2116,6 +2342,14 @@ namespace JesseSchalken\PhpTypeChecker\Node\Stmt {
         public function subStmts() {
             return [$this->body];
         }
+
+        public function unparse():\PhpParser\Node\Stmt\Catch_ {
+            return new \PhpParser\Node\Stmt\Catch_(
+                new \PhpParser\Node\Name\FullyQualified($this->class),
+                $this->variable,
+                $this->body->unparse()
+            );
+        }
     }
 
     class Global_ extends SingleStmt {
@@ -2129,8 +2363,14 @@ namespace JesseSchalken\PhpTypeChecker\Node\Stmt {
             $this->expr = $expr;
         }
 
-        function subStmts():array {
+        public function subStmts():array {
             return [$this->expr];
+        }
+
+        public function unparse():array {
+            return [new \PhpParser\Node\Stmt\Global_([
+                $this->expr->unparse_(),
+            ])];
         }
     }
 
@@ -2145,8 +2385,12 @@ namespace JesseSchalken\PhpTypeChecker\Node\Stmt {
             $this->name = $name;
         }
 
-        function subStmts():array {
+        public function subStmts():array {
             return [];
+        }
+
+        public function unparse():array {
+            return [new \PhpParser\Node\Stmt\Label($this->name)];
         }
     }
 
@@ -2161,20 +2405,44 @@ namespace JesseSchalken\PhpTypeChecker\Node\Stmt {
             $this->name = $name;
         }
 
-        function subStmts():array {
+        public function subStmts():array {
             return [];
+        }
+
+        public function unparse():array {
+            return [new \PhpParser\Node\Stmt\Goto_($this->name)];
         }
     }
 }
 
 namespace JesseSchalken\PhpTypeChecker\Node\Expr {
 
-    use JesseSchalken\PhpTypeChecker\Node\Stmt;
     use JesseSchalken\PhpTypeChecker\Node\Node;
+    use JesseSchalken\PhpTypeChecker\Node\Stmt;
 
     abstract class Expr extends Stmt\SingleStmt {
         public function isLValue() {
             return false;
+        }
+
+        public function unparse():array {
+            return [$this->unparse_()];
+        }
+
+        public abstract function unparse_():\PhpParser\Node\Expr;
+
+        /**
+         * @return \PhpParser\Node\Expr|\PhpParser\Node\Name
+         */
+        public function unparseOrName() {
+            return $this->unparse_();
+        }
+
+        /**
+         * @return \PhpParser\Node\Expr|string
+         */
+        public function unparseOrString() {
+            return $this->unparse_();
         }
     }
 
@@ -2189,7 +2457,7 @@ namespace JesseSchalken\PhpTypeChecker\Node\Expr {
             $this->exprs = $exprs;
         }
 
-        function subStmts():array {
+        public function subStmts():array {
             $stmts = [];
             foreach ($this->exprs as $expr) {
                 if ($expr) {
@@ -2197,6 +2465,15 @@ namespace JesseSchalken\PhpTypeChecker\Node\Expr {
                 }
             }
             return $stmts;
+        }
+
+        public function unparse_():\PhpParser\Node\Expr {
+            $exprs = [];
+            /** @var Expr|null $expr */
+            foreach ($this->exprs as $expr) {
+                $exprs[] = $expr ? $expr->unparse_() : null;
+            }
+            return new \PhpParser\Node\Expr\List_($exprs);
         }
     }
 
@@ -2215,7 +2492,7 @@ namespace JesseSchalken\PhpTypeChecker\Node\Expr {
             $this->value = $value;
         }
 
-        function subStmts():array {
+        public function subStmts():array {
             $stmts = [];
             if ($this->key) {
                 $stmts[] = $this->key;
@@ -2224,6 +2501,13 @@ namespace JesseSchalken\PhpTypeChecker\Node\Expr {
                 $stmts[] = $this->value;
             }
             return $stmts;
+        }
+
+        public function unparse_():\PhpParser\Node\Expr {
+            return new \PhpParser\Node\Expr\Yield_(
+                $this->value->unparse_(),
+                $this->key ? $this->key->unparse_() : null
+            );
         }
     }
 
@@ -2238,8 +2522,12 @@ namespace JesseSchalken\PhpTypeChecker\Node\Expr {
             $this->name = $name;
         }
 
-        function subStmts():array {
+        public function subStmts():array {
             return [];
+        }
+
+        public function unparse_():\PhpParser\Node\Expr {
+            return new \PhpParser\Node\Expr\ConstFetch(new \PhpParser\Node\Name\FullyQualified($this->name));
         }
     }
 
@@ -2258,8 +2546,15 @@ namespace JesseSchalken\PhpTypeChecker\Node\Expr {
             $this->const = $const;
         }
 
-        function subStmts():array {
+        public function subStmts():array {
             return [$this->class];
+        }
+
+        public function unparse_():\PhpParser\Node\Expr {
+            return new \PhpParser\Node\Expr\ClassConstFetch(
+                $this->class->unparseOrName(),
+                $this->const
+            );
         }
     }
 
@@ -2275,8 +2570,12 @@ namespace JesseSchalken\PhpTypeChecker\Node\Expr {
             return true;
         }
 
-        function subStmts():array {
+        public function subStmts():array {
             return [$this->name];
+        }
+
+        public function unparse_():\PhpParser\Node\Expr {
+            return new \PhpParser\Node\Expr\Variable($this->name->unparseOrString());
         }
     }
 
@@ -2299,8 +2598,15 @@ namespace JesseSchalken\PhpTypeChecker\Node\Expr {
             return $this->object->isLValue();
         }
 
-        function subStmts():array {
+        public function subStmts():array {
             return [$this->object, $this->property];
+        }
+
+        public function unparse_():\PhpParser\Node\Expr {
+            return new \PhpParser\Node\Expr\PropertyFetch(
+                $this->object->unparse_(),
+                $this->property->unparseOrString()
+            );
         }
     }
 
@@ -2323,8 +2629,15 @@ namespace JesseSchalken\PhpTypeChecker\Node\Expr {
             return true;
         }
 
-        function subStmts():array {
+        public function subStmts():array {
             return [$this->class, $this->property];
+        }
+
+        public function unparse_():\PhpParser\Node\Expr {
+            return new \PhpParser\Node\Expr\StaticPropertyFetch(
+                $this->class->unparseOrName(),
+                $this->property->unparseOrString()
+            );
         }
     }
 
@@ -2347,8 +2660,15 @@ namespace JesseSchalken\PhpTypeChecker\Node\Expr {
             return $this->array->isLValue();
         }
 
-        function subStmts():array {
+        public function subStmts():array {
             return $this->key ? [$this->array, $this->key] : [$this->array];
+        }
+
+        public function unparse_():\PhpParser\Node\Expr {
+            return new \PhpParser\Node\Expr\ArrayDimFetch(
+                $this->array->unparse_(),
+                $this->key ? $this->key->unparse_() : null
+            );
         }
     }
 
@@ -2369,8 +2689,20 @@ namespace JesseSchalken\PhpTypeChecker\Node\Expr {
             $this->expr    = $expr;
         }
 
-        function subStmts():array {
+        public function subStmts():array {
             return [$this->expr];
+        }
+
+        public function unparse_():\PhpParser\Node\Expr {
+            $type = $this->require
+                ? ($this->once
+                    ? \PhpParser\Node\Expr\Include_::TYPE_REQUIRE_ONCE
+                    : \PhpParser\Node\Expr\Include_::TYPE_REQUIRE)
+                : ($this->once
+                    ? \PhpParser\Node\Expr\Include_::TYPE_INCLUDE_ONCE
+                    : \PhpParser\Node\Expr\Include_::TYPE_INCLUDE);
+
+            return new \PhpParser\Node\Expr\Include_($this->expr->unparse_(), $type);
         }
     }
 
@@ -2398,12 +2730,62 @@ namespace JesseSchalken\PhpTypeChecker\Node\Expr {
             $this->value = $value;
         }
 
-        function subStmts():array {
+        public function subStmts():array {
             return [];
+        }
+
+        public function unparse_():\PhpParser\Node\Expr {
+            switch ($this->type) {
+                case self::LINE:
+                    return new \PhpParser\Node\Scalar\MagicConst\Line();
+                case self::FILE:
+                    return new \PhpParser\Node\Scalar\MagicConst\File();
+                case self::DIR:
+                    return new \PhpParser\Node\Scalar\MagicConst\Dir();
+                case self::FUNCTION:
+                    return new \PhpParser\Node\Scalar\MagicConst\Function_();
+                case self::CLASS_:
+                    return new \PhpParser\Node\Scalar\MagicConst\Class_();
+                case self::TRAIT:
+                    return new \PhpParser\Node\Scalar\MagicConst\Trait_();
+                case self::METHOD:
+                    return new \PhpParser\Node\Scalar\MagicConst\Method();
+                case self::NAMESPACE:
+                    return new \PhpParser\Node\Scalar\MagicConst\Namespace_();
+                default:
+                    throw new \Exception('Invlaid magic constant type: ' . $this->type);
+            }
         }
     }
 
     class Literal extends Expr {
+        private static function literalToNode($value):\PhpParser\Node\Expr {
+            if (is_string($value)) {
+                return new \PhpParser\Node\Scalar\String_($value);
+            } elseif (is_bool($value)) {
+                $constant = $value ? 'true' : 'false';
+                return new \PhpParser\Node\Expr\ConstFetch(new \PhpParser\Node\Name\FullyQualified($constant));
+            } elseif (is_float($value)) {
+                return new \PhpParser\Node\Scalar\DNumber($value);
+            } elseif (is_int($value)) {
+                return new \PhpParser\Node\Scalar\LNumber($value);
+            } elseif (is_null($value)) {
+                return new \PhpParser\Node\Expr\ConstFetch(new \PhpParser\Node\Name\FullyQualified('null'));
+            } elseif (is_array($value)) {
+                $items = [];
+                foreach ($value as $k => $v) {
+                    $items[] = new \PhpParser\Node\Expr\ArrayItem(
+                        self::literalToNode($v),
+                        self::literalToNode($k),
+                        false
+                    );
+                }
+                return new \PhpParser\Node\Expr\Array_($items);
+            } else {
+                throw new \Exception('Invalid literal type: ' . gettype($value));
+            }
+        }
+
         /** @var array|bool|float|int|null|string */
         private $value;
 
@@ -2414,12 +2796,25 @@ namespace JesseSchalken\PhpTypeChecker\Node\Expr {
             $this->value = $value;
         }
 
-        function subStmts():array {
+        public function subStmts():array {
             return [];
+        }
+
+        public function unparse_():\PhpParser\Node\Expr {
+            return self::literalToNode($this->value);
+        }
+
+        public function unparseOrString() {
+            $value = $this->value;
+            if (is_string($value)) {
+                return $value;
+            } else {
+                return parent::unparseOrString();
+            }
         }
     }
 
-    class Call extends Expr {
+    abstract class Call extends Expr {
         /** @var CallArg[] */
         private $args = [];
 
@@ -2430,12 +2825,20 @@ namespace JesseSchalken\PhpTypeChecker\Node\Expr {
             $this->args = $args;
         }
 
-        function subStmts():array {
+        public function subStmts():array {
             $stmts = [];
             foreach ($this->args as $arg) {
                 $stmts[] = $arg->expr();
             }
             return $stmts;
+        }
+
+        protected function unparseArgs():array {
+            $args = [];
+            foreach ($this->args as $arg) {
+                $args[] = $arg->unparse();
+            }
+            return $args;
         }
     }
 
@@ -2452,8 +2855,15 @@ namespace JesseSchalken\PhpTypeChecker\Node\Expr {
             $this->function = $function;
         }
 
-        function subStmts():array {
+        public function subStmts():array {
             return array_merge(parent::subStmts(), [$this->function]);
+        }
+
+        public function unparse_():\PhpParser\Node\Expr {
+            return new \PhpParser\Node\Expr\FuncCall(
+                $this->function->unparseOrName(),
+                $this->unparseArgs()
+            );
         }
     }
 
@@ -2474,8 +2884,16 @@ namespace JesseSchalken\PhpTypeChecker\Node\Expr {
             $this->method = $method;
         }
 
-        function subStmts():array {
+        public function subStmts():array {
             return array_merge(parent::subStmts(), [$this->class, $this->method]);
+        }
+
+        public function unparse_():\PhpParser\Node\Expr {
+            return new \PhpParser\Node\Expr\StaticCall(
+                $this->class->unparseOrName(),
+                $this->method->unparseOrString(),
+                $this->unparseArgs()
+            );
         }
     }
 
@@ -2496,8 +2914,16 @@ namespace JesseSchalken\PhpTypeChecker\Node\Expr {
             $this->method = $method;
         }
 
-        function subStmts():array {
+        public function subStmts():array {
             return array_merge(parent::subStmts(), [$this->object, $this->method]);
+        }
+
+        public function unparse_():\PhpParser\Node\Expr {
+            return new \PhpParser\Node\Expr\MethodCall(
+                $this->object->unparse_(),
+                $this->method->unparseOrString(),
+                $this->unparseArgs()
+            );
         }
     }
 
@@ -2521,18 +2947,13 @@ namespace JesseSchalken\PhpTypeChecker\Node\Expr {
         public function expr() {
             return $this->expr;
         }
-    }
 
-    class Not_ extends Expr {
-        /** @var Expr */
-        private $expr;
-
-        function __construct(Expr $expr) {
-            $this->expr = $expr;
-        }
-
-        function subStmts():array {
-            return [$this->expr];
+        public function unparse():\PhpParser\Node\Arg {
+            return new \PhpParser\Node\Arg(
+                $this->expr->unparse_(),
+                $this->byRef,
+                $this->splat
+            );
         }
     }
 
@@ -2547,7 +2968,7 @@ namespace JesseSchalken\PhpTypeChecker\Node\Expr {
             $this->items = $items;
         }
 
-        function subStmts():array {
+        public function subStmts():array {
             $stmts = [];
             foreach ($this->items as $item) {
                 foreach ($item->subStmts() as $stmt) {
@@ -2555,6 +2976,14 @@ namespace JesseSchalken\PhpTypeChecker\Node\Expr {
                 }
             }
             return $stmts;
+        }
+
+        public function unparse_():\PhpParser\Node\Expr {
+            $items = [];
+            foreach ($this->items as $item) {
+                $items[] = $item->unparse();
+            }
+            return new \PhpParser\Node\Expr\Array_($items);
         }
     }
 
@@ -2584,26 +3013,19 @@ namespace JesseSchalken\PhpTypeChecker\Node\Expr {
             }
             return $stmts;
         }
-    }
 
-    class Empty_ extends Expr {
-        /** @var Expr */
-        private $expr;
-
-        public function __construct(Expr $expr) {
-            $this->expr = $expr;
-        }
-
-        function subStmts():array {
-            return [$this->expr];
+        public function unparse():\PhpParser\Node\Expr\ArrayItem {
+            return new \PhpParser\Node\Expr\ArrayItem(
+                $this->value->unparse_(),
+                $this->key ? $this->key->unparse_() : null,
+                $this->byRef
+            );
         }
     }
 
-    class New_ extends Expr {
+    class New_ extends Call {
         /** @var Expr */
         private $class;
-        /** @var CallArg[] */
-        private $args;
 
         /**
          * @param Expr      $class
@@ -2611,15 +3033,20 @@ namespace JesseSchalken\PhpTypeChecker\Node\Expr {
          */
         public function __construct(Expr $class, array $args) {
             $this->class = $class;
-            $this->args  = $args;
+            parent::__construct($args);
         }
 
-        function subStmts():array {
-            $stmts = [$this->class];
-            foreach ($this->args as $arg) {
-                $stmts[] = $arg->expr();
-            }
+        public function subStmts():array {
+            $stmts   = parent::subStmts();
+            $stmts[] = $this->class;
             return $stmts;
+        }
+
+        public function unparse_():\PhpParser\Node\Expr {
+            return new \PhpParser\Node\Expr\New_(
+                $this->class->unparseOrName(),
+                $this->unparseArgs()
+            );
         }
     }
 
@@ -2631,8 +3058,12 @@ namespace JesseSchalken\PhpTypeChecker\Node\Expr {
             $this->expr = $expr;
         }
 
-        function subStmts():array {
+        public function subStmts():array {
             return [$this->expr];
+        }
+
+        public function unparse_():\PhpParser\Node\Expr {
+            return new \PhpParser\Node\Expr\Print_($this->expr->unparse_());
         }
     }
 
@@ -2659,10 +3090,25 @@ namespace JesseSchalken\PhpTypeChecker\Node\Expr {
             $this->body   = $body;
         }
 
-        function subStmts():array {
+        public function subStmts():array {
             $stmts = [$this->body];
             $stmts = array_merge($stmts, $this->type->subStmts());
             return $stmts;
+        }
+
+        public function unparse_():\PhpParser\Node\Expr {
+            $subNodes = $this->type->unparseAttributes();
+
+            $uses = [];
+            foreach ($this->uses as $use) {
+                $uses[] = $use->unparse();
+            }
+
+            return new \PhpParser\Node\Expr\Closure(array_replace($subNodes, [
+                'static' => $this->static,
+                'uses'   => $uses,
+                'stmts'  => $this->body->unparse(),
+            ]));
         }
     }
 
@@ -2679,6 +3125,10 @@ namespace JesseSchalken\PhpTypeChecker\Node\Expr {
         public function __construct($name, $byRef) {
             $this->name  = $name;
             $this->byRef = $byRef;
+        }
+
+        public function unparse():\PhpParser\Node\Expr\ClosureUse {
+            return new \PhpParser\Node\Expr\ClosureUse($this->name, $this->byRef);
         }
     }
 
@@ -2701,16 +3151,40 @@ namespace JesseSchalken\PhpTypeChecker\Node\Expr {
             $this->false = $false;
         }
 
-        function subStmts():array {
+        public function subStmts():array {
             $stmts = [$this->cond, $this->false];
             if ($this->true) {
                 $stmts[] = $this->true;
             }
             return $stmts;
         }
+
+        public function unparse_():\PhpParser\Node\Expr {
+            return new \PhpParser\Node\Expr\Ternary(
+                $this->cond->unparse_(),
+                $this->true ? $this->true->unparse_() : null,
+                $this->false->unparse_()
+            );
+        }
     }
 
     class ConcatMany extends Expr {
+        /**
+         * @param Expr[] $exprs
+         * @return \PhpParser\Node\Expr[]
+         */
+        public static function unparseEncaps($exprs) {
+            $parts = [];
+            foreach ($exprs as $expr) {
+                $expr = $expr->unparseOrString();
+                if (is_string($expr)) {
+                    $expr = new \PhpParser\Node\Scalar\EncapsedStringPart($expr);
+                }
+                $parts[] = $expr;
+            }
+            return $parts;
+        }
+
         /** @var Expr[] */
         private $exprs;
 
@@ -2721,8 +3195,12 @@ namespace JesseSchalken\PhpTypeChecker\Node\Expr {
             $this->exprs = $exprs;
         }
 
-        function subStmts():array {
+        public function subStmts():array {
             return $this->exprs;
+        }
+
+        public function unparse_():\PhpParser\Node\Expr {
+            return new \PhpParser\Node\Scalar\Encapsed(self::unparseEncaps($this->exprs));
         }
     }
 
@@ -2737,8 +3215,16 @@ namespace JesseSchalken\PhpTypeChecker\Node\Expr {
             $this->exprs = $exprs;
         }
 
-        function subStmts():array {
+        public function subStmts():array {
             return $this->exprs;
+        }
+
+        public function unparse_():\PhpParser\Node\Expr {
+            $exprs = [];
+            foreach ($this->exprs as $expr) {
+                $exprs[] = $expr->unparse_();
+            }
+            return new \PhpParser\Node\Expr\Isset_($exprs);
         }
     }
 
@@ -2817,8 +3303,18 @@ namespace JesseSchalken\PhpTypeChecker\Node\Expr {
             $this->right = $right;
         }
 
-        function subStmts():array {
+        public function subStmts():array {
             return [$this->left, $this->right];
+        }
+
+        public function unparse_():\PhpParser\Node\Expr {
+            $left  = $this->left->unparse_();
+            $right = $this->right->unparse_();
+            // TOOD
+            switch ($this->type) {
+                default:
+                    throw new \Exception('Invalid binary operator type: ' . $this->type);
+            }
         }
     }
 
@@ -2845,8 +3341,30 @@ namespace JesseSchalken\PhpTypeChecker\Node\Expr {
             $this->expr = $expr;
         }
 
-        function subStmts():array {
+        public function subStmts():array {
             return [$this->expr];
+        }
+
+        public function unparse_():\PhpParser\Node\Expr {
+            $expr = $this->expr->unparse_();
+            switch ($this->type) {
+                case self::INT:
+                    return new \PhpParser\Node\Expr\Cast\Int_($expr);
+                case self::BOOL:
+                    return new \PhpParser\Node\Expr\Cast\Bool_($expr);
+                case self::FLOAT:
+                    return new \PhpParser\Node\Expr\Cast\Double($expr);
+                case self::STRING:
+                    return new \PhpParser\Node\Expr\Cast\String_($expr);
+                case self::ARRAY:
+                    return new \PhpParser\Node\Expr\Cast\Array_($expr);
+                case self::OBJECT:
+                    return new \PhpParser\Node\Expr\Cast\Object_($expr);
+                case self::UNSET:
+                    return new \PhpParser\Node\Expr\Cast\Unset_($expr);
+                default:
+                    throw new \Exception('Invalid cast type: ' . $this->type);
+            }
         }
     }
 
@@ -2879,8 +3397,17 @@ namespace JesseSchalken\PhpTypeChecker\Node\Expr {
             $this->expr = $expr;
         }
 
-        function subStmts():array {
+        public function subStmts():array {
             return [$this->expr];
+        }
+
+        public function unparse_():\PhpParser\Node\Expr {
+            $expr = $this->expr->unparse_();
+            // TODO
+            switch ($this->type) {
+                default:
+                    throw new \Exception('Invalid unary operator type: ' . $this->type);
+            }
         }
     }
 
@@ -2895,8 +3422,13 @@ namespace JesseSchalken\PhpTypeChecker\Node\Expr {
             $this->expr = $expr;
         }
 
-        function subStmts():array {
+        public function subStmts():array {
             return $this->expr ? [$this->expr] : [];
+        }
+
+        public function unparse_():\PhpParser\Node\Expr {
+            $expr = $this->expr ? $this->expr->unparse_() : null;
+            return new \PhpParser\Node\Expr\Exit_($expr);
         }
     }
 
@@ -2911,8 +3443,12 @@ namespace JesseSchalken\PhpTypeChecker\Node\Expr {
             $this->parts = $parts;
         }
 
-        function subStmts():array {
+        public function subStmts():array {
             return $this->parts;
+        }
+
+        public function unparse_():\PhpParser\Node\Expr {
+            return new \PhpParser\Node\Expr\ShellExec(ConcatMany::unparseEncaps($this->parts));
         }
     }
 
@@ -2942,8 +3478,20 @@ namespace JesseSchalken\PhpTypeChecker\Node\Expr {
             return $this->class;
         }
 
-        function subStmts():array {
+        public function subStmts():array {
             return [];
+        }
+
+        public function unparse_():\PhpParser\Node\Expr {
+            return new \PhpParser\Node\Expr\ClassConstFetch(new \PhpParser\Node\Name\FullyQualified($this->class), 'class');
+        }
+
+        public function unparseOrName() {
+            return new \PhpParser\Node\Name\FullyQualified($this->class);
+        }
+
+        public function unparseOrString() {
+            return $this->class;
         }
     }
 
@@ -2959,8 +3507,19 @@ namespace JesseSchalken\PhpTypeChecker\Node\Expr {
             }
         }
 
-        function subStmts():array {
+        public function subStmts():array {
             return [];
+        }
+
+        public function unparse_():\PhpParser\Node\Expr {
+            return new \PhpParser\Node\Expr\ClassConstFetch(
+                new \PhpParser\Node\Name('static'),
+                'class'
+            );
+        }
+
+        public function unparseOrName() {
+            return new \PhpParser\Node\Name('static');
         }
     }
 }
@@ -2970,5 +3529,11 @@ namespace JesseSchalken\PhpTypeChecker\Node\Type {
     use JesseSchalken\PhpTypeChecker\Node\Node;
 
     class Type extends Node {
+        /**
+         * @return null|string|\PhpParser\Node\Name
+         */
+        public function unparse() {
+            return null;
+        }
     }
 }
