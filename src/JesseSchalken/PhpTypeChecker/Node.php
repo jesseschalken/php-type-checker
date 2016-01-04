@@ -2,13 +2,10 @@
 
 namespace JesseSchalken\PhpTypeChecker\Node {
 
-    use JesseSchalken\MagicUtils\DeepClone;
-    use PhpParser\Lexer;
-    use PhpParser\Node;
-    use PhpParser\Parser\Php7;
-    use PhpParser\PrettyPrinter\Standard;
-    use function JesseSchalken\MagicUtils\clone_ref;
-    use function JesseSchalken\PhpTypeChecker\recursive_scan2;
+    use JesseSchalken\PhpTypeChecker\Node\Expr;
+    use JesseSchalken\PhpTypeChecker\Node\Stmt;
+    use JesseSchalken\PhpTypeChecker\Node\Type;
+    use JesseSchalken\PhpTypeChecker\Parser;
 
     class CodeLocation {
         /** @var string */
@@ -43,6 +40,105 @@ namespace JesseSchalken\PhpTypeChecker\Node {
             print $location->format($message);
         }
     }
+
+    class File {
+        /**
+         * @param string[]      $paths
+         * @param ErrorReceiver $errors
+         * @return File[]
+         */
+        static function parse(array $paths, ErrorReceiver $errors):array {
+            /**
+             * @var Parser\ParsedFile[] $parsed
+             * @var self[]              $result
+             */
+            $parsed  = [];
+            $defined = new Parser\GlobalDefinedNames;
+            $result  = [];
+            foreach ($paths as $path) {
+                $file = new Parser\ParsedFile($path, $errors);
+                $defined->addNodes($file->nodes);
+                $parsed[] = $file;
+            }
+            foreach ($parsed as $file) {
+                $self           = new self();
+                $self->contents = (new Parser\Parser($file, $defined))->parseStmts($file->nodes);
+                $self->path     = $file->path;
+                $self->shebang  = $file->shebang;
+                $result[]       = $self;
+            }
+            return $result;
+        }
+
+        /** @var string */
+        private $path;
+        /** @var string */
+        private $shebang = '';
+        /** @var Stmt\Stmt */
+        private $contents;
+
+        public function path() {
+            return $this->path;
+        }
+
+        /**
+         * @return string
+         * @throws \Exception
+         */
+        public function unparse() {
+            $nodes = [];
+
+            $currentNamespace = null;
+            $currentNodes     = [];
+
+            foreach ($this->contents->split() as $stmt) {
+                $namespaces = $stmt->namespaces();
+                if (count($namespaces) > 1) {
+                    throw new \Exception('Cant unparse single statement defining symbols in multiple namespaces');
+                }
+
+                $stmtNodes     = $stmt->unparse();
+                $stmtNamespace = $namespaces ? $namespaces[0] : null;
+
+                if (
+                    $currentNamespace === null ||
+                    $stmtNamespace === null ||
+                    $stmtNamespace === $currentNamespace ||
+                    !$currentNodes
+                ) {
+                    $currentNamespace = $stmtNamespace;
+                    $currentNodes     = array_merge($currentNodes, $stmtNodes);
+                } else {
+                    $nodes[] = new \PhpParser\Node\Stmt\Namespace_(
+                        $currentNamespace ? new \PhpParser\Node\Name($currentNamespace) : null,
+                        $currentNodes
+                    );
+
+                    $currentNamespace = null;
+                    $currentNodes     = [];
+                }
+            }
+
+            if ($currentNodes) {
+                $nodes[] = new \PhpParser\Node\Stmt\Namespace_(
+                    $currentNamespace ? new \PhpParser\Node\Name($currentNamespace) : null,
+                    $currentNodes
+                );
+            }
+
+            return $this->shebang . (new \PhpParser\PrettyPrinter\Standard())->prettyPrintFile($nodes);
+        }
+    }
+}
+
+namespace JesseSchalken\PhpTypeChecker\Parser {
+
+    use JesseSchalken\MagicUtils\DeepClone;
+    use JesseSchalken\PhpTypeChecker\Node\CodeLocation;
+    use JesseSchalken\PhpTypeChecker\Node\ErrorReceiver;
+    use JesseSchalken\PhpTypeChecker\Node\Expr;
+    use JesseSchalken\PhpTypeChecker\Node\Stmt;
+    use function JesseSchalken\MagicUtils\clone_ref;
 
     abstract class DefinedNames {
         private $names = [];
@@ -91,33 +187,33 @@ namespace JesseSchalken\PhpTypeChecker\Node {
     }
 
     abstract class Uses {
-        /** @var Node\Name */
+        /** @var \PhpParser\Node\Name */
         private $namespace;
-        /** @var Node\Name[] */
+        /** @var \PhpParser\Node\Name[] */
         private $uses;
         /** @var DefinedNames */
         private $defined;
 
-        public function __construct(Node\Name $namespace, DefinedNames $defined) {
+        public function __construct(\PhpParser\Node\Name $namespace, DefinedNames $defined) {
             $this->namespace = $namespace;
             $this->defined   = $defined;
         }
 
         /**
-         * @param Node\Name $name
-         * @param Uses      $classes
-         * @return Node\Name
+         * @param \PhpParser\Node\Name $name
+         * @param Uses                 $classes
+         * @return \PhpParser\Node\Name
          */
-        public final function resolve(Node\Name $name, Uses $classes) {
+        public final function resolve(\PhpParser\Node\Name $name, Uses $classes) {
             if ($name->isFullyQualified()) {
                 // \Foo\Bar
                 return $name;
             } elseif ($name->isRelative()) {
                 // namespace\Foo\Bar
-                return Node\Name::concat($this->namespace, $name);
+                return \PhpParser\Node\Name::concat($this->namespace, $name);
             } elseif ($name->isQualified()) {
                 // Foo\Bar
-                return Node\Name::concat($classes->resolveUnqualified($name->getFirst()), $name->slice(1));
+                return \PhpParser\Node\Name::concat($classes->resolveUnqualified($name->getFirst()), $name->slice(1));
             } else {
                 // Bar
                 return $this->resolveUnqualified($name->getFirst());
@@ -126,7 +222,7 @@ namespace JesseSchalken\PhpTypeChecker\Node {
 
         /**
          * @param string $alias
-         * @return Node\Name
+         * @return \PhpParser\Node\Name
          */
         private function resolveUnqualified($alias) {
             if (isset($this->uses[$this->normalize($alias)])) {
@@ -138,25 +234,25 @@ namespace JesseSchalken\PhpTypeChecker\Node {
 
         /**
          * @param string $alias
-         * @return Node\Name
+         * @return \PhpParser\Node\Name
          */
         protected function resolveDefault($alias) {
-            return Node\Name::concat($this->namespace, $alias);
+            return \PhpParser\Node\Name::concat($this->namespace, $alias);
         }
 
         /**
-         * @param Node\Name   $name
-         * @param string|null $alias
+         * @param \PhpParser\Node\Name $name
+         * @param string|null          $alias
          */
-        public final function add(Node\Name $name, $alias = null) {
+        public final function add(\PhpParser\Node\Name $name, $alias = null) {
             $this->uses[$this->normalize($alias ?: $name->getLast())] = $name;
         }
 
         /**
-         * @param Node\Name $name
+         * @param \PhpParser\Node\Name $name
          * @return bool
          */
-        protected final function defined(Node\Name $name) {
+        protected final function defined(\PhpParser\Node\Name $name) {
             return $this->defined->has($name->toString());
         }
 
@@ -183,7 +279,7 @@ namespace JesseSchalken\PhpTypeChecker\Node {
         protected function resolveDefault($alias) {
             $local = parent::resolveDefault($alias);
 
-            return $this->defined($local) ? $local : new Node\Name([$alias]);
+            return $this->defined($local) ? $local : new \PhpParser\Node\Name([$alias]);
         }
     }
 
@@ -191,7 +287,7 @@ namespace JesseSchalken\PhpTypeChecker\Node {
         protected function resolveDefault($alias) {
             $local = parent::resolveDefault($alias);
 
-            return $this->defined($local) ? $local : new Node\Name([$alias]);
+            return $this->defined($local) ? $local : new \PhpParser\Node\Name([$alias]);
         }
     }
 
@@ -223,20 +319,20 @@ namespace JesseSchalken\PhpTypeChecker\Node {
     }
 
     /**
-     * @param Node $node
-     * @return Node[]
+     * @param \PhpParser\Node $node
+     * @return \PhpParser\Node[]
      */
-    function node_sub_nodes(Node $node):array {
+    function node_sub_nodes(\PhpParser\Node $node):array {
         $result = [];
         foreach ($node->getSubNodeNames() as $prop) {
             $value = $node->$prop;
             if (is_array($value)) {
                 foreach ($value as $value2) {
-                    if ($value2 instanceof Node) {
+                    if ($value2 instanceof \PhpParser\Node) {
                         $result[] = $value2;
                     }
                 }
-            } elseif ($value instanceof Node) {
+            } elseif ($value instanceof \PhpParser\Node) {
                 $result[] = $value;
             }
         }
@@ -260,8 +356,8 @@ namespace JesseSchalken\PhpTypeChecker\Node {
         }
 
         /**
-         * @param Node[] $nodes
-         * @param string $prefix
+         * @param \PhpParser\Node[] $nodes
+         * @param string            $prefix
          */
         public function addNodes(array $nodes, $prefix = '') {
             foreach ($nodes as $node) {
@@ -270,20 +366,20 @@ namespace JesseSchalken\PhpTypeChecker\Node {
         }
 
         /**
-         * @param Node   $node
-         * @param string $prefix
+         * @param \PhpParser\Node $node
+         * @param string          $prefix
          * @return void
          */
-        public function addNode(Node $node, $prefix = '') {
-            if ($node instanceof Node\Stmt\Function_) {
+        public function addNode(\PhpParser\Node $node, $prefix = '') {
+            if ($node instanceof \PhpParser\Node\Stmt\Function_) {
                 $this->functions->add($prefix . $node->name);
-            } elseif ($node instanceof Node\Stmt\ClassLike) {
+            } elseif ($node instanceof \PhpParser\Node\Stmt\ClassLike) {
                 $this->classes->add($prefix . $node->name);
-            } elseif ($node instanceof Node\Stmt\Const_) {
+            } elseif ($node instanceof \PhpParser\Node\Stmt\Const_) {
                 foreach ($node->consts as $const) {
                     $this->constants->add($prefix . $const->name);
                 }
-            } elseif ($node instanceof Node\Stmt\Namespace_) {
+            } elseif ($node instanceof \PhpParser\Node\Stmt\Namespace_) {
                 $prefix = $node->name ? $node->name->toString() . '\\' : '';
             }
 
@@ -296,7 +392,7 @@ namespace JesseSchalken\PhpTypeChecker\Node {
         public $path;
         /** @var string */
         public $contents = '';
-        /** @var Node[] */
+        /** @var \PhpParser\Node[] */
         public $nodes = [];
         /** @var string */
         public $shebang = '';
@@ -317,8 +413,8 @@ namespace JesseSchalken\PhpTypeChecker\Node {
                 $this->lineOffset = 1;
             }
 
-            $parser = new Php7(
-                new Lexer([
+            $parser = new \PhpParser\Parser\Php7(
+                new \PhpParser\Lexer([
                     'usedAttributes' => [
                         'comments',
                         'startLine',
@@ -345,7 +441,7 @@ namespace JesseSchalken\PhpTypeChecker\Node {
             return new CodeLocation($this->path, $line, $col);
         }
 
-        public function locateNode(Node $node):CodeLocation {
+        public function locateNode(\PhpParser\Node $node):CodeLocation {
             $line = $this->lineOffset + $node->getLine();
             $col  = $this->offsetToColumn($node->getAttribute('startFilePos'));
             return new CodeLocation($this->path, $line, $col);
@@ -368,93 +464,9 @@ namespace JesseSchalken\PhpTypeChecker\Node {
         }
     }
 
-    class File {
-        /**
-         * @param string[]      $paths
-         * @param ErrorReceiver $errors
-         * @return File[]
-         */
-        static function parse(array $paths, ErrorReceiver $errors):array {
-            /**
-             * @var ParsedFile[] $parsed
-             * @var self[]       $result
-             */
-            $parsed  = [];
-            $defined = new GlobalDefinedNames;
-            $result  = [];
-            foreach ($paths as $path) {
-                $file = new ParsedFile($path, $errors);
-                $defined->addNodes($file->nodes);
-                $parsed[] = $file;
-            }
-            foreach ($parsed as $file) {
-                $self           = new self();
-                $self->contents = (new Parser($file, $defined))->parseStmts($file->nodes);
-                $self->path     = $file->path;
-                $self->shebang  = $file->shebang;
-                $result[]       = $self;
-            }
-            return $result;
-        }
-
-        /** @var string */
-        private $path;
-        /** @var string */
-        private $shebang = '';
-        /** @var Stmt */
-        private $contents;
-
-        public function path() {
-            return $this->path;
-        }
-
-        public function unparse() {
-            $nodes = [];
-
-            $currentNamespace = null;
-            $currentNodes     = [];
-
-            foreach ($this->contents->split() as $stmt) {
-                $namespaces = $stmt->namespaces();
-                if (count($namespaces) > 1) {
-                    throw new \Exception('Cant unparse single statement defining symbols in multiple namespaces');
-                }
-
-                $stmtNodes     = $stmt->unparse();
-                $stmtNamespace = $namespaces ? $namespaces[0] : null;
-
-                if (
-                    $currentNamespace === null ||
-                    $stmtNamespace === null ||
-                    $stmtNamespace === $currentNamespace
-                ) {
-                    $currentNamespace = $stmtNamespace;
-                    $currentNodes     = array_merge($currentNodes, $stmtNodes);
-                } else {
-                    $nodes[] = new Node\Stmt\Namespace_(
-                        $currentNamespace ? new Node\Name($currentNamespace) : null,
-                        $currentNodes
-                    );
-
-                    $currentNamespace = null;
-                    $currentNodes     = [];
-                }
-            }
-
-            if ($currentNodes) {
-                $nodes[] = new Node\Stmt\Namespace_(
-                    $currentNamespace ? new Node\Name($currentNamespace) : null,
-                    $currentNodes
-                );
-            }
-
-            return (new Standard())->prettyPrintFile($nodes);
-        }
-    }
-
     class Parser {
 
-        /** @var Node\Name */
+        /** @var \PhpParser\Node\Name */
         private $namespace;
         /** @var Uses */
         private $useFunction;
@@ -463,7 +475,7 @@ namespace JesseSchalken\PhpTypeChecker\Node {
         /** @var Uses */
         private $useConstant;
 
-        /** @var StmtBlock[] */
+        /** @var Stmt\Block[] */
         private $finallys = [];
 
         /** @var bool */
@@ -494,13 +506,13 @@ namespace JesseSchalken\PhpTypeChecker\Node {
         public function __construct($file, GlobalDefinedNames $globals) {
             $this->globals     = $globals;
             $this->locals      = new DefinedNamesCaseSensitive();
-            $this->finallys[0] = new StmtBlock();
+            $this->finallys[0] = new Stmt\Block();
             $this->file        = $file;
             $this->resetNamespace();
         }
 
-        private function resetNamespace(Node\Name $name = null) {
-            $this->namespace   = $name ?: new Node\Name('');
+        private function resetNamespace(\PhpParser\Node\Name $name = null) {
+            $this->namespace   = $name ?: new \PhpParser\Node\Name('');
             $this->useClass    = new ClassUses($this->namespace, $this->globals->classes);
             $this->useFunction = new FunctionUses($this->namespace, $this->globals->classes);
             $this->useConstant = new ConstantUses($this->namespace, $this->globals->classes);
@@ -525,11 +537,11 @@ namespace JesseSchalken\PhpTypeChecker\Node {
         }
 
         /**
-         * @param Node\Name $name
-         * @return AbstractClassName
+         * @param \PhpParser\Node\Name $name
+         * @return Expr\AbstractClassName
          * @throws \Exception
          */
-        private function resolveClass(Node\Name $name):AbstractClassName {
+        private function resolveClass(\PhpParser\Node\Name $name):Expr\AbstractClassName {
             if (
                 !$name->isFullyQualified() &&
                 !$name->isRelative() &&
@@ -538,118 +550,118 @@ namespace JesseSchalken\PhpTypeChecker\Node {
                 switch (strtolower($name->getFirst())) {
                     case 'self':
                         if ($this->class) {
-                            return new ClassName($this->class);
+                            return new Expr\ClassName($this->class);
                         } else {
                             throw new \Exception('Cannot use "self" outside a class');
                         }
                     case 'parent':
                         if ($this->parent) {
-                            return new ClassName($this->parent);
+                            return new Expr\ClassName($this->parent);
                         } else {
                             throw new \Exception('Cannot use "parent" without a parent class');
                         }
                     case 'static':
-                        return new StaticClassName();
+                        return new Expr\StaticClassName();
                 }
             }
 
-            return new ClassName($this->useClass->resolve($name, $this->useClass)->toString());
+            return new Expr\ClassName($this->useClass->resolve($name, $this->useClass)->toString());
         }
 
         /**
-         * @param Node\Name $name
+         * @param \PhpParser\Node\Name $name
          * @return string
          */
-        private function resolveConst(Node\Name $name) {
+        private function resolveConst(\PhpParser\Node\Name $name) {
             return $this->useConstant->resolve($name, $this->useClass)->toString();
         }
 
         /**
-         * @param Node\Name $name
+         * @param \PhpParser\Node\Name $name
          * @return string
          */
-        private function resolveFunction(Node\Name $name) {
+        private function resolveFunction(\PhpParser\Node\Name $name) {
             return $this->useConstant->resolve($name, $this->useClass)->toString();
         }
 
         /**
-         * @param Node\Stmt[] $nodes
-         * @return StmtBlock
+         * @param \PhpParser\Node\Stmt[] $nodes
+         * @return Stmt\Block
          */
-        public function parseStmts(array $nodes):StmtBlock {
-            $stmts = new StmtBlock();
+        public function parseStmts(array $nodes):Stmt\Block {
+            $stmts = new Stmt\Block();
             foreach ($nodes as $node) {
                 $stmts->add($this->parseStmt($node));
             }
             return $stmts;
         }
 
-        private function newUnusedvariable():Variable {
-            return new Variable(new Literal($this->locals->create('_')));
+        private function newUnusedvariable():Expr\Variable {
+            return new Expr\Variable(new Expr\Literal($this->locals->create('_')));
         }
 
-        private function parseStmt(Node $node):Stmt {
-            if ($node instanceof Node\Expr) {
+        private function parseStmt(\PhpParser\Node $node):Stmt\Stmt {
+            if ($node instanceof \PhpParser\Node\Expr) {
                 return $this->parseExpr($node);
-            } elseif ($node instanceof Node\Stmt\If_) {
+            } elseif ($node instanceof \PhpParser\Node\Stmt\If_) {
                 $false = $this->parseStmts($node->else ? $node->else->stmts : []);
 
                 foreach (array_reverse($node->elseifs) as $elseIf) {
-                    $false = new If_(
+                    $false = new Stmt\If_(
                         $this->parseExpr($elseIf->cond),
                         $this->parseStmts($elseIf->stmts),
                         $false
                     );
                 }
 
-                return new If_(
+                return new Stmt\If_(
                     $this->parseExpr($node->cond),
                     $this->parseStmts($node->stmts),
                     $false
                 );
-            } elseif ($node instanceof Node\Stmt\Return_) {
+            } elseif ($node instanceof \PhpParser\Node\Stmt\Return_) {
                 $expr = $this->parseExprNull($node->expr);
 
                 if ($this->finallys) {
                     $stmts = [];
                     if ($expr) {
                         $var     = $this->newUnusedvariable();
-                        $stmts[] = new BinOp($var, $this->returnRef ? BinOp::ASSIGN_REF : BinOp::ASSIGN, $expr);
+                        $stmts[] = new Expr\BinOp($var, $this->returnRef ? Expr\BinOp::ASSIGN_REF : Expr\BinOp::ASSIGN, $expr);
                         $expr    = $var;
                     }
-                    return new StmtBlock(array_merge(
+                    return new Stmt\Block(array_merge(
                         $stmts,
                         $this->finallys,
-                        [new Return_($expr)]
+                        [new Stmt\Return_($expr)]
                     ));
                 }
 
-                return new Return_($expr);
-            } elseif ($node instanceof Node\Stmt\Namespace_) {
+                return new Stmt\Return_($expr);
+            } elseif ($node instanceof \PhpParser\Node\Stmt\Namespace_) {
                 $copy = clone $this;
                 $copy->resetNamespace($node->name);
                 return $copy->parseStmts($node->stmts);
-            } elseif ($node instanceof Node\Stmt\Class_) {
+            } elseif ($node instanceof \PhpParser\Node\Stmt\Class_) {
                 return $this->parseClass($node);
-            } elseif ($node instanceof Node\Stmt\Function_) {
+            } elseif ($node instanceof \PhpParser\Node\Stmt\Function_) {
                 $name = $this->prefixName($node->name);
                 $self = clone $this;
                 $self->resetMagicConstants();
                 $self->function = $name;
-                return new Function_(
+                return new Stmt\Function_(
                     $name,
                     $self->parseFunctionType($node),
                     $self->parseStmts($node->stmts)
                 );
-            } elseif ($node instanceof Node\Stmt\Interface_) {
+            } elseif ($node instanceof \PhpParser\Node\Stmt\Interface_) {
                 $name = $this->prefixName($node->name);
                 $self = clone $this;
 
                 $self->resetMagicConstants();
                 $self->class = $name;
 
-                return new Interface_($name, $self->parseClassMembers($node));
-            } elseif ($node instanceof Node\Stmt\Trait_) {
+                return new Stmt\Interface_($name, $self->parseClassMembers($node));
+            } elseif ($node instanceof \PhpParser\Node\Stmt\Trait_) {
                 $name = $this->prefixName($node->name);
                 $self = clone $this;
 
@@ -657,140 +669,140 @@ namespace JesseSchalken\PhpTypeChecker\Node {
                 $self->trait  = $name;
                 $self->class  = 'TEMPORARY';
                 $self->parent = 'TEMPORARY';
-                return new Trait_($name, $self->parseClassMembers($node));
-            } elseif ($node instanceof Node\Stmt\Use_) {
+                return new Stmt\Trait_($name, $self->parseClassMembers($node));
+            } elseif ($node instanceof \PhpParser\Node\Stmt\Use_) {
                 $this->addUses($node->uses, $node->type);
-                return new StmtBlock();
-            } elseif ($node instanceof Node\Stmt\GroupUse) {
+                return new Stmt\Block();
+            } elseif ($node instanceof \PhpParser\Node\Stmt\GroupUse) {
                 $this->addUses($node->uses, $node->type, $node->prefix);
-                return new StmtBlock();
-            } elseif ($node instanceof Node\Stmt\Foreach_) {
-                return new Foreach_(
+                return new Stmt\Block();
+            } elseif ($node instanceof \PhpParser\Node\Stmt\Foreach_) {
+                return new Stmt\Foreach_(
                     $this->parseExpr($node->expr),
                     $this->parseExprNull($node->keyVar),
                     $this->parseExpr($node->valueVar),
                     $node->byRef,
                     $this->parseStmts($node->stmts)
                 );
-            } elseif ($node instanceof Node\Stmt\Echo_) {
-                return new Echo_($this->parseExprs($node->exprs));
-            } elseif ($node instanceof Node\Stmt\InlineHTML) {
-                return new InlineHTML($node->value);
-            } elseif ($node instanceof Node\Stmt\Const_) {
+            } elseif ($node instanceof \PhpParser\Node\Stmt\Echo_) {
+                return new Stmt\Echo_($this->parseExprs($node->exprs));
+            } elseif ($node instanceof \PhpParser\Node\Stmt\InlineHTML) {
+                return new Stmt\InlineHTML($node->value);
+            } elseif ($node instanceof \PhpParser\Node\Stmt\Const_) {
                 $stmts = [];
                 foreach ($node->consts as $const) {
-                    $stmts[] = new Const_(
+                    $stmts[] = new Stmt\Const_(
                         $this->prefixName($const->name),
                         $this->parseExpr($const->value)
                     );
                 }
-                return new StmtBlock($stmts);
-            } elseif ($node instanceof Node\Stmt\Throw_) {
-                return new Throw_($this->parseExpr($node->expr));
-            } elseif ($node instanceof Node\Stmt\Static_) {
+                return new Stmt\Block($stmts);
+            } elseif ($node instanceof \PhpParser\Node\Stmt\Throw_) {
+                return new Stmt\Throw_($this->parseExpr($node->expr));
+            } elseif ($node instanceof \PhpParser\Node\Stmt\Static_) {
                 $stmts = [];
                 foreach ($node->vars as $finallyVar) {
-                    $stmts[] = new StaticVar(
+                    $stmts[] = new Stmt\StaticVar(
                         $finallyVar->name,
                         $this->parseExprNull($finallyVar->default)
                     );
                 }
-                return new StmtBlock($stmts);
-            } elseif ($node instanceof Node\Stmt\For_) {
-                return new For_(
+                return new Stmt\Block($stmts);
+            } elseif ($node instanceof \PhpParser\Node\Stmt\For_) {
+                return new Stmt\For_(
                     $this->parseExprs($node->init),
                     $this->parseExprs($node->cond),
                     $this->parseExprs($node->loop),
                     $this->parseStmts($node->stmts)
                 );
-            } elseif ($node instanceof Node\Stmt\Break_) {
+            } elseif ($node instanceof \PhpParser\Node\Stmt\Break_) {
                 if ($node->num === null) {
                     $levels = 1;
-                } elseif ($node->num instanceof Node\Scalar\LNumber) {
+                } elseif ($node->num instanceof \PhpParser\Node\Scalar\LNumber) {
                     $levels = $node->num->value;
                 } else {
                     throw new \Exception('"break" statement must use a constant operand');
                 }
 
-                return new StmtBlock(array_merge(
+                return new Stmt\Block(array_merge(
                     array_slice($this->finallys, 0, $levels),
-                    [new Break_($levels)]
+                    [new Stmt\Break_($levels)]
                 ));
-            } elseif ($node instanceof Node\Stmt\Continue_) {
+            } elseif ($node instanceof \PhpParser\Node\Stmt\Continue_) {
                 if ($node->num === null) {
                     $levels = 1;
-                } elseif ($node->num instanceof Node\Scalar\LNumber) {
+                } elseif ($node->num instanceof \PhpParser\Node\Scalar\LNumber) {
                     $levels = $node->num->value;
                 } else {
                     throw new \Exception('"continue" statement must use a constant operand');
                 }
 
-                return new StmtBlock(array_merge(
+                return new Stmt\Block(array_merge(
                     array_slice($this->finallys, 0, $levels),
-                    [new Continue_($levels)]
+                    [new Stmt\Continue_($levels)]
                 ));
-            } elseif ($node instanceof Node\Stmt\Switch_) {
+            } elseif ($node instanceof \PhpParser\Node\Stmt\Switch_) {
                 $cases = [];
                 foreach ($node->cases as $case) {
-                    $cases[] = new Case_(
+                    $cases[] = new Stmt\Case_(
                         $this->parseExprNull($case->cond),
                         $this->parseStmts($case->stmts)
                     );
                 }
-                return new Switch_(
+                return new Stmt\Switch_(
                     $this->parseExpr($node->cond),
                     $cases
                 );
-            } elseif ($node instanceof Node\Stmt\Unset_) {
-                return new Unset_($this->parseExprs($node->vars));
-            } elseif ($node instanceof Node\Stmt\While_) {
-                return new While_($this->parseExpr($node->cond), $this->parseStmts($node->stmts));
-            } elseif ($node instanceof Node\Stmt\TryCatch) {
+            } elseif ($node instanceof \PhpParser\Node\Stmt\Unset_) {
+                return new Stmt\Unset_($this->parseExprs($node->vars));
+            } elseif ($node instanceof \PhpParser\Node\Stmt\While_) {
+                return new Stmt\While_($this->parseExpr($node->cond), $this->parseStmts($node->stmts));
+            } elseif ($node instanceof \PhpParser\Node\Stmt\TryCatch) {
                 if ($node->finallyStmts) {
                     $finally      = $this->parseStmts($node->finallyStmts);
                     $finallyVar   = $this->newUnusedvariable();
                     $exceptionVar = $this->newUnusedvariable();
 
                     $self = clone $this;
-                    $self->finallys[0]->add(new StmtBlock([
-                        new BinOp($finallyVar, BinOp::ASSIGN, new Literal(true)),
+                    $self->finallys[0]->add(new Stmt\Block([
+                        new Expr\BinOp($finallyVar, Expr\BinOp::ASSIGN, new Expr\Literal(true)),
                         $finally,
                     ]));
 
-                    return new StmtBlock([
-                        new BinOp($finallyVar, BinOp::ASSIGN, new Literal(false)),
-                        new Try_($self->parseTryCatch($node), [
-                            new Catch_('Exception', $exceptionVar, new StmtBlock()),
+                    return new Stmt\Block([
+                        new Expr\BinOp($finallyVar, Expr\BinOp::ASSIGN, new Expr\Literal(false)),
+                        new Stmt\Try_($self->parseTryCatch($node), [
+                            new Stmt\Catch_('Exception', $exceptionVar, new Stmt\Block()),
                         ]),
-                        new If_(
-                            new UnOp(UnOp::BOOL_NOT, $finallyVar),
+                        new Stmt\If_(
+                            new Expr\UnOp(Expr\UnOp::BOOL_NOT, $finallyVar),
                             $finally,
-                            new StmtBlock()
+                            new Stmt\Block()
                         ),
-                        new If_(
-                            new Isset_([$exceptionVar]),
-                            new Throw_($exceptionVar),
-                            new StmtBlock()
+                        new Stmt\If_(
+                            new Expr\Isset_([$exceptionVar]),
+                            new Stmt\Throw_($exceptionVar),
+                            new Stmt\Block()
                         ),
                     ]);
                 } else {
                     return $this->parseTryCatch($node);
                 }
-            } elseif ($node instanceof Node\Stmt\Do_) {
-                return new DoWhile(
+            } elseif ($node instanceof \PhpParser\Node\Stmt\Do_) {
+                return new Stmt\DoWhile(
                     $this->parseStmts($node->stmts),
                     $this->parseExpr($node->cond)
                 );
-            } elseif ($node instanceof Node\Stmt\Global_) {
-                $stmts = new StmtBlock();
+            } elseif ($node instanceof \PhpParser\Node\Stmt\Global_) {
+                $stmts = new Stmt\Block();
                 foreach ($node->vars as $var) {
-                    $stmts->add(new Global_($this->parseExpr($var)));
+                    $stmts->add(new Stmt\Global_($this->parseExpr($var)));
                 }
                 return $stmts;
-            } elseif ($node instanceof Node\Stmt\Label) {
-                return new Label_($node->name);
-            } elseif ($node instanceof Node\Stmt\Goto_) {
-                return new Goto_($node->name);
+            } elseif ($node instanceof \PhpParser\Node\Stmt\Label) {
+                return new Stmt\Label_($node->name);
+            } elseif ($node instanceof \PhpParser\Node\Stmt\Goto_) {
+                return new Stmt\Goto_($node->name);
             } else {
                 throw new \Exception('Unhandled statement type: ' . get_class($node));
             }
@@ -801,16 +813,16 @@ namespace JesseSchalken\PhpTypeChecker\Node {
          * @return string
          */
         private function prefixName($name) {
-            return Node\Name::concat($this->namespace, $name)->toString();
+            return \PhpParser\Node\Name::concat($this->namespace, $name)->toString();
         }
 
         /**
-         * @param Node\Stmt\ClassLike $node
-         * @return ClassMember[]
+         * @param \PhpParser\Node\Stmt\ClassLike $node
+         * @return Stmt\ClassMember[]
          */
-        private function parseClassMembers(Node\Stmt\ClassLike $node) {
+        private function parseClassMembers(\PhpParser\Node\Stmt\ClassLike $node) {
             foreach ($node->stmts as $stmt) {
-                if ($stmt instanceof Node\Stmt\ClassMethod && $stmt->stmts) {
+                if ($stmt instanceof \PhpParser\Node\Stmt\ClassMethod && $stmt->stmts) {
                     $this->parseStmts($stmt->stmts);
                 }
             }
@@ -818,31 +830,31 @@ namespace JesseSchalken\PhpTypeChecker\Node {
         }
 
         /**
-         * @param Node\FunctionLike $node
-         * @return FunctionSignature
+         * @param \PhpParser\Node\FunctionLike $node
+         * @return Stmt\FunctionSignature
          */
-        private function parseFunctionType(Node\FunctionLike $node) {
-            return new FunctionSignature(false, []);
+        private function parseFunctionType(\PhpParser\Node\FunctionLike $node) {
+            return new Stmt\FunctionSignature(false, []);
         }
 
         /**
-         * @param Node\Stmt\UseUse[] $uses
-         * @param int                $type_
-         * @param Node\Name|null     $prefix
+         * @param \PhpParser\Node\Stmt\UseUse[] $uses
+         * @param int                           $type_
+         * @param \PhpParser\Node\Name|null     $prefix
          * @throws \Exception
          */
         private function addUses(array $uses, $type_, $prefix = null) {
             foreach ($uses as $use) {
-                $name = $prefix ? Node\Name::concat($prefix, $use->name) : $use->name;
-                $type = $use->type === Node\Stmt\Use_::TYPE_UNKNOWN ? $type_ : $use->type;
+                $name = $prefix ? \PhpParser\Node\Name::concat($prefix, $use->name) : $use->name;
+                $type = $use->type === \PhpParser\Node\Stmt\Use_::TYPE_UNKNOWN ? $type_ : $use->type;
                 switch ($type) {
-                    case Node\Stmt\Use_::TYPE_CONSTANT:
+                    case \PhpParser\Node\Stmt\Use_::TYPE_CONSTANT:
                         $this->useConstant->add($name, $use->alias);
                         break;
-                    case Node\Stmt\Use_::TYPE_FUNCTION:
+                    case \PhpParser\Node\Stmt\Use_::TYPE_FUNCTION:
                         $this->useFunction->add($name, $use->alias);
                         break;
-                    case Node\Stmt\Use_::TYPE_NORMAL:
+                    case \PhpParser\Node\Stmt\Use_::TYPE_NORMAL:
                         $this->useClass->add($name, $use->alias);
                         break;
                     default:
@@ -852,8 +864,8 @@ namespace JesseSchalken\PhpTypeChecker\Node {
         }
 
         /**
-         * @param Node\Expr[] $nodes
-         * @return Expr[]
+         * @param \PhpParser\Node\Expr[] $nodes
+         * @return Expr\Expr[]
          */
         private function parseExprs(array $nodes):array {
             $exprs = [];
@@ -864,72 +876,72 @@ namespace JesseSchalken\PhpTypeChecker\Node {
         }
 
         /**
-         * @param Node\Expr|null $node
-         * @return Expr|null
+         * @param \PhpParser\Node\Expr|null $node
+         * @return Expr\Expr|null
          */
-        private function parseExprNull(Node\Expr $node = null) {
+        private function parseExprNull(\PhpParser\Node\Expr $node = null) {
             return $node ? $this->parseExpr($node) : null;
         }
 
         /**
-         * @param Node\Expr|string $node
-         * @return Expr
+         * @param \PhpParser\Node\Expr|string $node
+         * @return Expr\Expr
          */
         private function parseExprString($node) {
-            return is_string($node) ? new Literal($node) : $this->parseExpr($node);
+            return is_string($node) ? new Expr\Literal($node) : $this->parseExpr($node);
         }
 
         /**
-         * @param Node\Expr|Node\Name $node
-         * @return Expr
+         * @param \PhpParser\Node\Expr|\PhpParser\Node\Name $node
+         * @return Expr\Expr
          * @throws \Exception
          */
         private function parseExprClass($node) {
-            return $node instanceof Node\Name
+            return $node instanceof \PhpParser\Node\Name
                 ? $this->resolveClass($node)
                 : $this->parseExpr($node);
         }
 
-        private function parseExpr(Node\Expr $node):Expr {
-            if ($node instanceof Node\Expr\Variable) {
-                return new Variable($this->parseExprString($node->name));
-            } elseif ($node instanceof Node\Expr\ConstFetch) {
+        private function parseExpr(\PhpParser\Node\Expr $node):Expr\Expr {
+            if ($node instanceof \PhpParser\Node\Expr\Variable) {
+                return new Expr\Variable($this->parseExprString($node->name));
+            } elseif ($node instanceof \PhpParser\Node\Expr\ConstFetch) {
                 $name = $this->resolveConst($node->name);
                 switch (strtolower($name)) {
                     case 'true':
-                        return new Literal(true);
+                        return new Expr\Literal(true);
                     case 'false':
-                        return new Literal(false);
+                        return new Expr\Literal(false);
                     case 'null':
-                        return new Literal(null);
+                        return new Expr\Literal(null);
                     default:
-                        return new ConstFetch($name);
+                        return new Expr\ConstFetch($name);
                 }
-            } elseif ($node instanceof Node\Expr\Assign) {
-                return new BinOp(
+            } elseif ($node instanceof \PhpParser\Node\Expr\Assign) {
+                return new Expr\BinOp(
                     $this->parseExpr($node->var),
-                    BinOp::ASSIGN,
+                    Expr\BinOp::ASSIGN,
                     $this->parseExpr($node->expr)
                 );
-            } elseif ($node instanceof Node\Scalar\LNumber) {
-                return new Literal($node->value);
-            } elseif ($node instanceof Node\Scalar\DNumber) {
-                return new Literal($node->value);
-            } elseif ($node instanceof Node\Expr\Include_) {
+            } elseif ($node instanceof \PhpParser\Node\Scalar\LNumber) {
+                return new Expr\Literal($node->value);
+            } elseif ($node instanceof \PhpParser\Node\Scalar\DNumber) {
+                return new Expr\Literal($node->value);
+            } elseif ($node instanceof \PhpParser\Node\Expr\Include_) {
                 switch ($node->type) {
-                    case Node\Expr\Include_::TYPE_INCLUDE:
+                    case \PhpParser\Node\Expr\Include_::TYPE_INCLUDE:
                         $require = false;
                         $once    = false;
                         break;
-                    case Node\Expr\Include_::TYPE_INCLUDE_ONCE:
+                    case \PhpParser\Node\Expr\Include_::TYPE_INCLUDE_ONCE:
                         $require = false;
                         $once    = true;
                         break;
-                    case Node\Expr\Include_::TYPE_REQUIRE:
+                    case \PhpParser\Node\Expr\Include_::TYPE_REQUIRE:
                         $require = true;
                         $once    = false;
                         break;
-                    case Node\Expr\Include_::TYPE_REQUIRE_ONCE:
+                    case \PhpParser\Node\Expr\Include_::TYPE_REQUIRE_ONCE:
                         $require = true;
                         $once    = true;
                         break;
@@ -937,313 +949,313 @@ namespace JesseSchalken\PhpTypeChecker\Node {
                         throw new \Exception("Unknown require type: {$node->type}");
                 }
 
-                return new Include_($this->parseExpr($node->expr), $require, $once);
-            } elseif ($node instanceof Node\Expr\BinaryOp\Concat) {
-                return new BinOp(
+                return new Expr\Include_($this->parseExpr($node->expr), $require, $once);
+            } elseif ($node instanceof \PhpParser\Node\Expr\BinaryOp\Concat) {
+                return new Expr\BinOp(
                     $this->parseExpr($node->left),
-                    BinOp::CONCAT,
+                    Expr\BinOp::CONCAT,
                     $this->parseExpr($node->right)
                 );
-            } elseif ($node instanceof Node\Scalar\MagicConst) {
+            } elseif ($node instanceof \PhpParser\Node\Scalar\MagicConst) {
                 $type = $node->getName();
                 $line = $node->getAttribute('startLine');
-                return new MagicConst($type, $this->getMagicConstValue($type, $line));
-            } elseif ($node instanceof Node\Scalar\String_) {
-                return new Literal($node->value);
-            } elseif ($node instanceof Node\Expr\StaticCall) {
-                return new StaticCall(
+                return new Expr\MagicConst($type, $this->getMagicConstValue($type, $line));
+            } elseif ($node instanceof \PhpParser\Node\Scalar\String_) {
+                return new Expr\Literal($node->value);
+            } elseif ($node instanceof \PhpParser\Node\Expr\StaticCall) {
+                return new Expr\StaticCall(
                     $this->parseArgs($node->args),
                     $this->parseExprClass($node->class),
                     $this->parseExprString($node->name)
                 );
-            } elseif ($node instanceof Node\Expr\FuncCall) {
+            } elseif ($node instanceof \PhpParser\Node\Expr\FuncCall) {
                 $function = $node->name;
-                $function = $function instanceof Node\Name
-                    ? new Literal($this->resolveFunction($function))
+                $function = $function instanceof \PhpParser\Node\Name
+                    ? new Expr\Literal($this->resolveFunction($function))
                     : $this->parseExpr($function);
 
-                return new FunctionCall($function, $this->parseArgs($node->args));
-            } elseif ($node instanceof Node\Expr\Array_) {
+                return new Expr\FunctionCall($function, $this->parseArgs($node->args));
+            } elseif ($node instanceof \PhpParser\Node\Expr\Array_) {
                 $items = [];
                 foreach ($node->items as $item) {
-                    $items[] = new ArrayItem(
+                    $items[] = new Expr\ArrayItem(
                         $this->parseExprNull($item->key),
                         $this->parseExpr($item->value),
                         $item->byRef
                     );
                 }
-                return new Array_($items);
-            } elseif ($node instanceof Node\Expr\Empty_) {
-                return new UnOp(UnOp::EMPTY, $this->parseExpr($node->expr));
-            } elseif ($node instanceof Node\Expr\ArrayDimFetch) {
-                return new ArrayAccess(
+                return new Expr\Array_($items);
+            } elseif ($node instanceof \PhpParser\Node\Expr\Empty_) {
+                return new Expr\UnOp(Expr\UnOp::EMPTY, $this->parseExpr($node->expr));
+            } elseif ($node instanceof \PhpParser\Node\Expr\ArrayDimFetch) {
+                return new Expr\ArrayAccess(
                     $this->parseExpr($node->var),
                     $this->parseExprNull($node->dim)
                 );
-            } elseif ($node instanceof Node\Expr\MethodCall) {
-                return new MethodCall(
+            } elseif ($node instanceof \PhpParser\Node\Expr\MethodCall) {
+                return new Expr\MethodCall(
                     $this->parseArgs($node->args),
                     $this->parseExpr($node->var),
                     $this->parseExprString($node->name)
                 );
-            } elseif ($node instanceof Node\Expr\New_) {
+            } elseif ($node instanceof \PhpParser\Node\Expr\New_) {
                 $class = $node->class;
-                if ($class instanceof Node\Stmt\Class_) {
+                if ($class instanceof \PhpParser\Node\Stmt\Class_) {
                     $class   = $this->parseClass($class, $this->globals->classes->create($this->prefixName('class')));
                     $stmts[] = $class;
-                    $class   = new Literal($class->name());
+                    $class   = new Expr\Literal($class->name());
                 } else {
                     $class = $this->parseExprClass($class);
                 }
 
-                return new New_($class, $this->parseArgs($node->args));
-            } elseif ($node instanceof Node\Expr\BooleanNot) {
-                return new UnOp(UnOp::BOOL_NOT, $this->parseExpr($node->expr));
-            } elseif ($node instanceof Node\Expr\Print_) {
-                return new UnOp(UnOp::PRINT, $this->parseExpr($node->expr));
-            } elseif ($node instanceof Node\Expr\Closure) {
+                return new Expr\New_($class, $this->parseArgs($node->args));
+            } elseif ($node instanceof \PhpParser\Node\Expr\BooleanNot) {
+                return new Expr\UnOp(Expr\UnOp::BOOL_NOT, $this->parseExpr($node->expr));
+            } elseif ($node instanceof \PhpParser\Node\Expr\Print_) {
+                return new Expr\UnOp(Expr\UnOp::PRINT, $this->parseExpr($node->expr));
+            } elseif ($node instanceof \PhpParser\Node\Expr\Closure) {
                 $uses = [];
                 foreach ($node->uses as $use) {
-                    $uses[] = new ClosureUse($use->var, $use->byRef);
+                    $uses[] = new Expr\ClosureUse($use->var, $use->byRef);
                 }
-                return new Closure(
+                return new Expr\Closure(
                     $node->static,
                     $this->parseFunctionType($node),
                     $uses,
                     $this->parseStmts($node->stmts)
                 );
-            } elseif ($node instanceof Node\Expr\Ternary) {
-                return new Ternary(
+            } elseif ($node instanceof \PhpParser\Node\Expr\Ternary) {
+                return new Expr\Ternary(
                     $this->parseExpr($node->cond),
                     $this->parseExprNull($node->if),
                     $this->parseExpr($node->else)
                 );
-            } elseif ($node instanceof Node\Scalar\EncapsedStringPart) {
-                return new Literal($node->value);
-            } elseif ($node instanceof Node\Scalar\Encapsed) {
+            } elseif ($node instanceof \PhpParser\Node\Scalar\EncapsedStringPart) {
+                return new Expr\Literal($node->value);
+            } elseif ($node instanceof \PhpParser\Node\Scalar\Encapsed) {
                 $exprs = [];
                 foreach ($node->parts as $part) {
                     $exprs[] = $this->parseExpr($part);
                 }
-                return new ConcatMany($exprs);
-            } elseif ($node instanceof Node\Expr\StaticPropertyFetch) {
+                return new Expr\ConcatMany($exprs);
+            } elseif ($node instanceof \PhpParser\Node\Expr\StaticPropertyFetch) {
                 $class = $node->class;
                 $prop  = $node->name;
 
-                if ($class instanceof Node\Name) {
+                if ($class instanceof \PhpParser\Node\Name) {
                     $class = $this->resolveClass($class);
-                } elseif ($class instanceof Node\Expr) {
+                } elseif ($class instanceof \PhpParser\Node\Expr) {
                     $class = $this->parseExpr($class);
                 } else {
                     throw new \Exception('huh?');
                 }
 
                 if (is_string($prop)) {
-                    $prop = new Literal($prop);
-                } elseif ($prop instanceof Node\Expr) {
+                    $prop = new Expr\Literal($prop);
+                } elseif ($prop instanceof \PhpParser\Node\Expr) {
                     $prop = $this->parseExpr($prop);
                 } else {
                     throw new \Exception('huh?');
                 }
 
-                return new StaticPropertyAccess($class, $prop);
-            } elseif ($node instanceof Node\Expr\Isset_) {
-                return new Isset_($this->parseExprs($node->vars));
-            } elseif ($node instanceof Node\Expr\BinaryOp) {
+                return new Expr\StaticPropertyAccess($class, $prop);
+            } elseif ($node instanceof \PhpParser\Node\Expr\Isset_) {
+                return new Expr\Isset_($this->parseExprs($node->vars));
+            } elseif ($node instanceof \PhpParser\Node\Expr\BinaryOp) {
                 return $this->parseBinaryOp($node);
-            } elseif ($node instanceof Node\Expr\AssignOp) {
+            } elseif ($node instanceof \PhpParser\Node\Expr\AssignOp) {
                 return $this->parseAssignOp($node);
-            } elseif ($node instanceof Node\Expr\ErrorSuppress) {
-                return new UnOp(UnOp::SUPPRESS, $this->parseExpr($node->expr));
-            } elseif ($node instanceof Node\Expr\PropertyFetch) {
-                return new PropertyAccess(
+            } elseif ($node instanceof \PhpParser\Node\Expr\ErrorSuppress) {
+                return new Expr\UnOp(Expr\UnOp::SUPPRESS, $this->parseExpr($node->expr));
+            } elseif ($node instanceof \PhpParser\Node\Expr\PropertyFetch) {
+                return new Expr\PropertyAccess(
                     $this->parseExpr($node->var),
                     $this->parseExprString($node->name)
                 );
-            } elseif ($node instanceof Node\Expr\Exit_) {
-                return new Exit_($this->parseExprNull($node->expr));
-            } elseif ($node instanceof Node\Expr\Eval_) {
-                return new UnOp(UnOp::EVAL, $this->parseExpr($node->expr));
-            } elseif ($node instanceof Node\Expr\Cast) {
+            } elseif ($node instanceof \PhpParser\Node\Expr\Exit_) {
+                return new Expr\Exit_($this->parseExprNull($node->expr));
+            } elseif ($node instanceof \PhpParser\Node\Expr\Eval_) {
+                return new Expr\UnOp(Expr\UnOp::EVAL, $this->parseExpr($node->expr));
+            } elseif ($node instanceof \PhpParser\Node\Expr\Cast) {
                 return $this->parseCast($node);
-            } elseif ($node instanceof Node\Expr\Instanceof_) {
-                return new BinOp(
+            } elseif ($node instanceof \PhpParser\Node\Expr\Instanceof_) {
+                return new Expr\BinOp(
                     $this->parseExpr($node->expr),
-                    BinOp:: INSTANCEOF,
+                    Expr\BinOp:: INSTANCEOF,
                     $this->parseExprClass($node->class)
                 );
-            } elseif ($node instanceof Node\Expr\Clone_) {
-                return new UnOp(UnOp::CLONE, $this->parseExpr($node->expr));
-            } elseif ($node instanceof Node\Expr\Yield_) {
-                return new Yield_(
+            } elseif ($node instanceof \PhpParser\Node\Expr\Clone_) {
+                return new Expr\UnOp(Expr\UnOp::CLONE, $this->parseExpr($node->expr));
+            } elseif ($node instanceof \PhpParser\Node\Expr\Yield_) {
+                return new Expr\Yield_(
                     $this->parseExprNull($node->key),
                     $this->parseExprNull($node->value)
                 );
-            } elseif ($node instanceof Node\Expr\ClassConstFetch) {
+            } elseif ($node instanceof \PhpParser\Node\Expr\ClassConstFetch) {
                 if ($node->name === 'class') {
-                    if ($node->class instanceof Node\Name) {
+                    if ($node->class instanceof \PhpParser\Node\Name) {
                         return $this->resolveClass($node->class);
                     } else {
                         throw new \Exception('Use of ::class with expression is not supported');
                     }
                 } else {
-                    return new ClassConstFetch($this->parseExprClass($node->class), $node->name);
+                    return new Expr\ClassConstFetch($this->parseExprClass($node->class), $node->name);
                 }
-            } elseif ($node instanceof Node\Expr\UnaryMinus) {
-                return new UnOp(UnOp::NEGATE, $this->parseExpr($node->expr));
-            } elseif ($node instanceof Node\Expr\UnaryPlus) {
-                return new UnOp(UnOp::PLUS, $this->parseExpr($node->expr));
-            } elseif ($node instanceof Node\Expr\PostInc) {
-                return new UnOp(UnOp::POST_INC, $this->parseExpr($node->var));
-            } elseif ($node instanceof Node\Expr\PreInc) {
-                return new UnOp(UnOp::PRE_INC, $this->parseExpr($node->var));
-            } elseif ($node instanceof Node\Expr\PostDec) {
-                return new UnOp(UnOp::POST_DEC, $this->parseExpr($node->var));
-            } elseif ($node instanceof Node\Expr\PreDec) {
-                return new UnOp(UnOp::PRE_DEC, $this->parseExpr($node->var));
-            } elseif ($node instanceof Node\Expr\List_) {
+            } elseif ($node instanceof \PhpParser\Node\Expr\UnaryMinus) {
+                return new Expr\UnOp(Expr\UnOp::NEGATE, $this->parseExpr($node->expr));
+            } elseif ($node instanceof \PhpParser\Node\Expr\UnaryPlus) {
+                return new Expr\UnOp(Expr\UnOp::PLUS, $this->parseExpr($node->expr));
+            } elseif ($node instanceof \PhpParser\Node\Expr\PostInc) {
+                return new Expr\UnOp(Expr\UnOp::POST_INC, $this->parseExpr($node->var));
+            } elseif ($node instanceof \PhpParser\Node\Expr\PreInc) {
+                return new Expr\UnOp(Expr\UnOp::PRE_INC, $this->parseExpr($node->var));
+            } elseif ($node instanceof \PhpParser\Node\Expr\PostDec) {
+                return new Expr\UnOp(Expr\UnOp::POST_DEC, $this->parseExpr($node->var));
+            } elseif ($node instanceof \PhpParser\Node\Expr\PreDec) {
+                return new Expr\UnOp(Expr\UnOp::PRE_DEC, $this->parseExpr($node->var));
+            } elseif ($node instanceof \PhpParser\Node\Expr\List_) {
                 $exprs = [];
                 foreach ($node->vars as $v) {
                     $exprs[] = $this->parseExprNull($v);
                 }
-                return new List_($exprs);
-            } elseif ($node instanceof Node\Expr\AssignRef) {
-                return new BinOp(
+                return new Expr\List_($exprs);
+            } elseif ($node instanceof \PhpParser\Node\Expr\AssignRef) {
+                return new Expr\BinOp(
                     $this->parseExpr($node->var),
-                    BinOp::ASSIGN_REF,
+                    Expr\BinOp::ASSIGN_REF,
                     $this->parseExpr($node->expr)
                 );
-            } elseif ($node instanceof Node\Expr\BitwiseNot) {
-                return new UnOp(UnOp::BIT_NOT, $this->parseExpr($node->expr));
-            } elseif ($node instanceof Node\Expr\ShellExec) {
+            } elseif ($node instanceof \PhpParser\Node\Expr\BitwiseNot) {
+                return new Expr\UnOp(Expr\UnOp::BIT_NOT, $this->parseExpr($node->expr));
+            } elseif ($node instanceof \PhpParser\Node\Expr\ShellExec) {
                 $exprs = [];
                 foreach ($node->parts as $part) {
                     $exprs[] = $this->parseExpr($part);
                 }
-                return new ShellExec($exprs);
+                return new Expr\ShellExec($exprs);
             } else {
                 throw new \Exception('Unhandled expression type: ' . get_class($node));
             }
         }
 
-        private function parseCast(Node\Expr\Cast $node):Expr {
-            if ($node instanceof Node\Expr\Cast\Array_) {
-                $type = Cast::ARRAY;
-            } elseif ($node instanceof Node\Expr\Cast\Bool_) {
-                $type = Cast::BOOL;
-            } elseif ($node instanceof Node\Expr\Cast\Double) {
-                $type = Cast::FLOAT;
-            } elseif ($node instanceof Node\Expr\Cast\Int_) {
-                $type = Cast::INT;
-            } elseif ($node instanceof Node\Expr\Cast\Object_) {
-                $type = Cast::OBJECT;
-            } elseif ($node instanceof Node\Expr\Cast\String_) {
-                $type = Cast::STRING;
-            } elseif ($node instanceof Node\Expr\Cast\Unset_) {
-                $type = Cast::UNSET;
+        private function parseCast(\PhpParser\Node\Expr\Cast $node):Expr\Expr {
+            if ($node instanceof \PhpParser\Node\Expr\Cast\Array_) {
+                $type = Expr\Cast::ARRAY;
+            } elseif ($node instanceof \PhpParser\Node\Expr\Cast\Bool_) {
+                $type = Expr\Cast::BOOL;
+            } elseif ($node instanceof \PhpParser\Node\Expr\Cast\Double) {
+                $type = Expr\Cast::FLOAT;
+            } elseif ($node instanceof \PhpParser\Node\Expr\Cast\Int_) {
+                $type = Expr\Cast::INT;
+            } elseif ($node instanceof \PhpParser\Node\Expr\Cast\Object_) {
+                $type = Expr\Cast::OBJECT;
+            } elseif ($node instanceof \PhpParser\Node\Expr\Cast\String_) {
+                $type = Expr\Cast::STRING;
+            } elseif ($node instanceof \PhpParser\Node\Expr\Cast\Unset_) {
+                $type = Expr\Cast::UNSET;
             } else {
                 throw new \Exception('Unknown cast type: ' . get_class($node));
             }
 
-            return new Cast($type, $this->parseExpr($node->expr));
+            return new Expr\Cast($type, $this->parseExpr($node->expr));
         }
 
-        private function parseAssignOp(Node\Expr\AssignOp $node):Expr {
-            if ($node instanceof Node\Expr\AssignOp\BitwiseAnd) {
-                $type = BinOp::ASSIGN_BIT_AND;
-            } elseif ($node instanceof Node\Expr\AssignOp\BitwiseOr) {
-                $type = BinOp::ASSIGN_BIT_OR;
-            } elseif ($node instanceof Node\Expr\AssignOp\BitwiseXor) {
-                $type = BinOp::ASSIGN_BIT_XOR;
-            } elseif ($node instanceof Node\Expr\AssignOp\Concat) {
-                $type = BinOp::ASSIGN_CONCAT;
-            } elseif ($node instanceof Node\Expr\AssignOp\Div) {
-                $type = BinOp::ASSIGN_DIVIDE;
-            } elseif ($node instanceof Node\Expr\AssignOp\Minus) {
-                $type = BinOp::ASSIGN_SUBTRACT;
-            } elseif ($node instanceof Node\Expr\AssignOp\Mod) {
-                $type = BinOp::ASSIGN_MODULUS;
-            } elseif ($node instanceof Node\Expr\AssignOp\Mul) {
-                $type = BinOp::ASSIGN_MULTIPLY;
-            } elseif ($node instanceof Node\Expr\AssignOp\Plus) {
-                $type = BinOp::ASSIGN_ADD;
-            } elseif ($node instanceof Node\Expr\AssignOp\Pow) {
-                $type = BinOp::ASSIGN_EXPONENT;
-            } elseif ($node instanceof Node\Expr\AssignOp\ShiftLeft) {
-                $type = BinOp::ASSIGN_SHIFT_LEFT;
-            } elseif ($node instanceof Node\Expr\AssignOp\ShiftRight) {
-                $type = BinOp::ASSIGN_SHIFT_RIGHT;
+        private function parseAssignOp(\PhpParser\Node\Expr\AssignOp $node):Expr\Expr {
+            if ($node instanceof \PhpParser\Node\Expr\AssignOp\BitwiseAnd) {
+                $type = Expr\BinOp::ASSIGN_BIT_AND;
+            } elseif ($node instanceof \PhpParser\Node\Expr\AssignOp\BitwiseOr) {
+                $type = Expr\BinOp::ASSIGN_BIT_OR;
+            } elseif ($node instanceof \PhpParser\Node\Expr\AssignOp\BitwiseXor) {
+                $type = Expr\BinOp::ASSIGN_BIT_XOR;
+            } elseif ($node instanceof \PhpParser\Node\Expr\AssignOp\Concat) {
+                $type = Expr\BinOp::ASSIGN_CONCAT;
+            } elseif ($node instanceof \PhpParser\Node\Expr\AssignOp\Div) {
+                $type = Expr\BinOp::ASSIGN_DIVIDE;
+            } elseif ($node instanceof \PhpParser\Node\Expr\AssignOp\Minus) {
+                $type = Expr\BinOp::ASSIGN_SUBTRACT;
+            } elseif ($node instanceof \PhpParser\Node\Expr\AssignOp\Mod) {
+                $type = Expr\BinOp::ASSIGN_MODULUS;
+            } elseif ($node instanceof \PhpParser\Node\Expr\AssignOp\Mul) {
+                $type = Expr\BinOp::ASSIGN_MULTIPLY;
+            } elseif ($node instanceof \PhpParser\Node\Expr\AssignOp\Plus) {
+                $type = Expr\BinOp::ASSIGN_ADD;
+            } elseif ($node instanceof \PhpParser\Node\Expr\AssignOp\Pow) {
+                $type = Expr\BinOp::ASSIGN_EXPONENT;
+            } elseif ($node instanceof \PhpParser\Node\Expr\AssignOp\ShiftLeft) {
+                $type = Expr\BinOp::ASSIGN_SHIFT_LEFT;
+            } elseif ($node instanceof \PhpParser\Node\Expr\AssignOp\ShiftRight) {
+                $type = Expr\BinOp::ASSIGN_SHIFT_RIGHT;
             } else {
                 throw new \Exception('Unhandled assignment operator: ' . get_class($node));
             }
 
             $left  = $this->parseExpr($node->var);
             $right = $this->parseExpr($node->expr);
-            return new BinOp($left, $type, $right);
+            return new Expr\BinOp($left, $type, $right);
         }
 
-        private function parseBinaryOp(Node\Expr\BinaryOp $node):Expr {
-            if ($node instanceof Node\Expr\BinaryOp\BitwiseAnd) {
-                $type = BinOp::BIT_AND;
-            } elseif ($node instanceof Node\Expr\BinaryOp\BitwiseOr) {
-                $type = BinOp::BIT_OR;
-            } elseif ($node instanceof Node\Expr\BinaryOp\BitwiseXor) {
-                $type = BinOp::BIT_XOR;
-            } elseif ($node instanceof Node\Expr\BinaryOp\BooleanAnd) {
-                $type = BinOp::BOOl_AND;
-            } elseif ($node instanceof Node\Expr\BinaryOp\BooleanOr) {
-                $type = BinOp::BOOl_OR;
-            } elseif ($node instanceof Node\Expr\BinaryOp\Coalesce) {
-                $type = BinOp::COALESCE;
-            } elseif ($node instanceof Node\Expr\BinaryOp\Concat) {
-                $type = BinOp::CONCAT;
-            } elseif ($node instanceof Node\Expr\BinaryOp\Div) {
-                $type = BinOp::DIVIDE;
-            } elseif ($node instanceof Node\Expr\BinaryOp\Equal) {
-                $type = BinOp::EQUAL;
-            } elseif ($node instanceof Node\Expr\BinaryOp\Greater) {
-                $type = BinOp::GREATER;
-            } elseif ($node instanceof Node\Expr\BinaryOp\GreaterOrEqual) {
-                $type = BinOp::GREATER_OR_EQUAL;
-            } elseif ($node instanceof Node\Expr\BinaryOp\Identical) {
-                $type = BinOp::IDENTICAL;
-            } elseif ($node instanceof Node\Expr\BinaryOp\LogicalAnd) {
-                $type = BinOp::LOGIC_AND;
-            } elseif ($node instanceof Node\Expr\BinaryOp\LogicalOr) {
-                $type = BinOp::LOGIC_OR;
-            } elseif ($node instanceof Node\Expr\BinaryOp\LogicalXor) {
-                $type = BinOp::LOGIC_XOR;
-            } elseif ($node instanceof Node\Expr\BinaryOp\Minus) {
-                $type = BinOp::SUBTRACT;
-            } elseif ($node instanceof Node\Expr\BinaryOp\Mod) {
-                $type = BinOp::MODULUS;
-            } elseif ($node instanceof Node\Expr\BinaryOp\Mul) {
-                $type = BinOp::MULTIPLY;
-            } elseif ($node instanceof Node\Expr\BinaryOp\NotEqual) {
-                $type = BinOp::NOT_EQUAL;
-            } elseif ($node instanceof Node\Expr\BinaryOp\NotIdentical) {
-                $type = BinOp::NOT_IDENTICAL;
-            } elseif ($node instanceof Node\Expr\BinaryOp\Plus) {
-                $type = BinOp::ADD;
-            } elseif ($node instanceof Node\Expr\BinaryOp\Pow) {
-                $type = BinOp::EXPONENT;
-            } elseif ($node instanceof Node\Expr\BinaryOp\ShiftLeft) {
-                $type = BinOp::SHIFT_LEFT;
-            } elseif ($node instanceof Node\Expr\BinaryOp\ShiftRight) {
-                $type = BinOp::SHIFT_RIGHT;
-            } elseif ($node instanceof Node\Expr\BinaryOp\Smaller) {
-                $type = BinOp::LESS;
-            } elseif ($node instanceof Node\Expr\BinaryOp\SmallerOrEqual) {
-                $type = BinOp::LESS_OR_EQUAL;
-            } elseif ($node instanceof Node\Expr\BinaryOp\Spaceship) {
-                $type = BinOp::SPACESHIP;
+        private function parseBinaryOp(\PhpParser\Node\Expr\BinaryOp $node):Expr\Expr {
+            if ($node instanceof \PhpParser\Node\Expr\BinaryOp\BitwiseAnd) {
+                $type = Expr\BinOp::BIT_AND;
+            } elseif ($node instanceof \PhpParser\Node\Expr\BinaryOp\BitwiseOr) {
+                $type = Expr\BinOp::BIT_OR;
+            } elseif ($node instanceof \PhpParser\Node\Expr\BinaryOp\BitwiseXor) {
+                $type = Expr\BinOp::BIT_XOR;
+            } elseif ($node instanceof \PhpParser\Node\Expr\BinaryOp\BooleanAnd) {
+                $type = Expr\BinOp::BOOl_AND;
+            } elseif ($node instanceof \PhpParser\Node\Expr\BinaryOp\BooleanOr) {
+                $type = Expr\BinOp::BOOl_OR;
+            } elseif ($node instanceof \PhpParser\Node\Expr\BinaryOp\Coalesce) {
+                $type = Expr\BinOp::COALESCE;
+            } elseif ($node instanceof \PhpParser\Node\Expr\BinaryOp\Concat) {
+                $type = Expr\BinOp::CONCAT;
+            } elseif ($node instanceof \PhpParser\Node\Expr\BinaryOp\Div) {
+                $type = Expr\BinOp::DIVIDE;
+            } elseif ($node instanceof \PhpParser\Node\Expr\BinaryOp\Equal) {
+                $type = Expr\BinOp::EQUAL;
+            } elseif ($node instanceof \PhpParser\Node\Expr\BinaryOp\Greater) {
+                $type = Expr\BinOp::GREATER;
+            } elseif ($node instanceof \PhpParser\Node\Expr\BinaryOp\GreaterOrEqual) {
+                $type = Expr\BinOp::GREATER_OR_EQUAL;
+            } elseif ($node instanceof \PhpParser\Node\Expr\BinaryOp\Identical) {
+                $type = Expr\BinOp::IDENTICAL;
+            } elseif ($node instanceof \PhpParser\Node\Expr\BinaryOp\LogicalAnd) {
+                $type = Expr\BinOp::LOGIC_AND;
+            } elseif ($node instanceof \PhpParser\Node\Expr\BinaryOp\LogicalOr) {
+                $type = Expr\BinOp::LOGIC_OR;
+            } elseif ($node instanceof \PhpParser\Node\Expr\BinaryOp\LogicalXor) {
+                $type = Expr\BinOp::LOGIC_XOR;
+            } elseif ($node instanceof \PhpParser\Node\Expr\BinaryOp\Minus) {
+                $type = Expr\BinOp::SUBTRACT;
+            } elseif ($node instanceof \PhpParser\Node\Expr\BinaryOp\Mod) {
+                $type = Expr\BinOp::MODULUS;
+            } elseif ($node instanceof \PhpParser\Node\Expr\BinaryOp\Mul) {
+                $type = Expr\BinOp::MULTIPLY;
+            } elseif ($node instanceof \PhpParser\Node\Expr\BinaryOp\NotEqual) {
+                $type = Expr\BinOp::NOT_EQUAL;
+            } elseif ($node instanceof \PhpParser\Node\Expr\BinaryOp\NotIdentical) {
+                $type = Expr\BinOp::NOT_IDENTICAL;
+            } elseif ($node instanceof \PhpParser\Node\Expr\BinaryOp\Plus) {
+                $type = Expr\BinOp::ADD;
+            } elseif ($node instanceof \PhpParser\Node\Expr\BinaryOp\Pow) {
+                $type = Expr\BinOp::EXPONENT;
+            } elseif ($node instanceof \PhpParser\Node\Expr\BinaryOp\ShiftLeft) {
+                $type = Expr\BinOp::SHIFT_LEFT;
+            } elseif ($node instanceof \PhpParser\Node\Expr\BinaryOp\ShiftRight) {
+                $type = Expr\BinOp::SHIFT_RIGHT;
+            } elseif ($node instanceof \PhpParser\Node\Expr\BinaryOp\Smaller) {
+                $type = Expr\BinOp::LESS;
+            } elseif ($node instanceof \PhpParser\Node\Expr\BinaryOp\SmallerOrEqual) {
+                $type = Expr\BinOp::LESS_OR_EQUAL;
+            } elseif ($node instanceof \PhpParser\Node\Expr\BinaryOp\Spaceship) {
+                $type = Expr\BinOp::SPACESHIP;
             } else {
                 throw new \Exception('Unhandled binary operator: ' . get_class($node));
             }
 
             $left  = $this->parseExpr($node->left);
             $right = $this->parseExpr($node->right);
-            return new BinOp($left, $type, $right);
+            return new Expr\BinOp($left, $type, $right);
         }
 
         /**
@@ -1254,21 +1266,21 @@ namespace JesseSchalken\PhpTypeChecker\Node {
          */
         private function getMagicConstValue($type, $line) {
             switch ($type) {
-                case MagicConst::LINE:
+                case Expr\MagicConst::LINE:
                     return $line;
-                case MagicConst::FILE:
+                case Expr\MagicConst::FILE:
                     return realpath($this->file->path);
-                case MagicConst::DIR:
+                case Expr\MagicConst::DIR:
                     return dirname(realpath($this->file->path));
-                case MagicConst::FUNCTION:
+                case Expr\MagicConst::FUNCTION:
                     return (string)$this->function;
-                case MagicConst::CLASS_:
+                case Expr\MagicConst::CLASS_:
                     return (string)$this->class;
-                case MagicConst::TRAIT:
+                case Expr\MagicConst::TRAIT:
                     return (string)$this->class;
-                case MagicConst::METHOD:
+                case Expr\MagicConst::METHOD:
                     return $this->class ? "$this->class::$this->function" : "$this->function";
-                case MagicConst::NAMESPACE:
+                case Expr\MagicConst::NAMESPACE:
                     return $this->namespace->toString();
                 default:
                     throw new \Exception("Invalid magic constant type: $type");
@@ -1276,14 +1288,14 @@ namespace JesseSchalken\PhpTypeChecker\Node {
         }
 
         /**
-         * @param Node\Arg[] $args
-         * @return CallArg[]
+         * @param \PhpParser\Node\Arg[] $args
+         * @return Expr\CallArg[]
          * @throws \Exception
          */
         private function parseArgs(array $args) {
             $result = [];
             foreach ($args as $arg) {
-                $result[] = new CallArg(
+                $result[] = new Expr\CallArg(
                     $this->parseExpr($arg->value),
                     $arg->byRef,
                     $arg->unpack
@@ -1293,28 +1305,28 @@ namespace JesseSchalken\PhpTypeChecker\Node {
         }
 
         /**
-         * @param Node\Stmt\TryCatch $node
-         * @return Stmt
+         * @param \PhpParser\Node\Stmt\TryCatch $node
+         * @return Stmt\Stmt
          */
-        private function parseTryCatch(Node\Stmt\TryCatch $node):Stmt {
+        private function parseTryCatch(\PhpParser\Node\Stmt\TryCatch $node):Stmt\Stmt {
             $result = $this->parseStmts($node->stmts);
 
             if ($node->catches) {
                 $catches = [];
                 foreach ($node->catches as $catch) {
-                    $catches[] = new Catch_(
+                    $catches[] = new Stmt\Catch_(
                         $this->resolveClass($catch->type)->toString(),
                         $catch->var,
                         $this->parseStmts($catch->stmts)
                     );
                 }
-                $result = new Try_($result, $catches);
+                $result = new Stmt\Try_($result, $catches);
             }
 
             return $result;
         }
 
-        private function parseClass(Node\Stmt\Class_ $node, $name = null):Class_ {
+        private function parseClass(\PhpParser\Node\Stmt\Class_ $node, $name = null):Stmt\Class_ {
             $name       = $name ?: $this->prefixName($node->name);
             $parent     = $node->extends ? $this->resolveClass($node->extends)->toString() : null;
             $implements = [];
@@ -1326,7 +1338,7 @@ namespace JesseSchalken\PhpTypeChecker\Node {
             $self->resetMagicConstants();
             $self->class  = $name;
             $self->parent = $parent;
-            return new Class_(
+            return new Stmt\Class_(
                 $name,
                 $self->parseClassMembers($node),
                 $parent,
@@ -1334,6 +1346,15 @@ namespace JesseSchalken\PhpTypeChecker\Node {
             );
         }
     }
+}
+
+namespace JesseSchalken\PhpTypeChecker\Node\Stmt {
+
+    use JesseSchalken\PhpTypeChecker\Node\Expr;
+    use JesseSchalken\PhpTypeChecker\Node\Type;
+    use JesseSchalken\PhpTypeChecker\Parser;
+    use function JesseSchalken\MagicUtils\clone_ref;
+    use function JesseSchalken\PhpTypeChecker\recursive_scan2;
 
     abstract class Stmt {
         /**
@@ -1357,7 +1378,7 @@ namespace JesseSchalken\PhpTypeChecker\Node {
         }
     }
 
-    final class StmtBlock extends Stmt {
+    final class Block extends Stmt {
         /** @var Stmt[] */
         private $stmts;
 
@@ -1393,7 +1414,7 @@ namespace JesseSchalken\PhpTypeChecker\Node {
         }
 
         /**
-         * @return Node[]
+         * @return \PhpParser\Node[]
          */
         public function unparse():array {
             return [];
@@ -1403,14 +1424,14 @@ namespace JesseSchalken\PhpTypeChecker\Node {
     class DoWhile extends SingleStmt {
         /** @var Stmt */
         private $body;
-        /** @var Expr */
+        /** @var Expr\Expr */
         private $cond;
 
         /**
-         * @param Stmt $body
-         * @param Expr $cond
+         * @param Stmt      $body
+         * @param Expr\Expr $cond
          */
-        public function __construct(Stmt $body, Expr $cond) {
+        public function __construct(Stmt $body, Expr\Expr $cond) {
             $this->body = $body;
             $this->cond = $cond;
         }
@@ -1421,14 +1442,14 @@ namespace JesseSchalken\PhpTypeChecker\Node {
     }
 
     class If_ extends SingleStmt {
-        /** @var Expr */
+        /** @var Expr\Expr */
         private $cond;
         /** @var Stmt */
         private $true;
         /** @var Stmt */
         private $false;
 
-        public function __construct(Expr $cond, Stmt $true, Stmt $false) {
+        public function __construct(Expr\Expr $cond, Stmt $true, Stmt $false) {
             $this->cond  = $cond;
             $this->true  = $true;
             $this->false = $false;
@@ -1439,9 +1460,761 @@ namespace JesseSchalken\PhpTypeChecker\Node {
         }
     }
 
-    abstract class Expr extends SingleStmt {
+    class Return_ extends SingleStmt {
+        /** @var Expr\Expr|null */
+        private $expr;
+
+        public function __construct(Expr\Expr $expr = null) {
+            $this->expr = $expr;
+        }
+
+        function subStmts():array {
+            return $this->expr ? [$this->expr] : [];
+        }
+    }
+
+    class Visibility {
+        const PUBLIC    = 'public';
+        const PROTECTED = 'protected';
+        const PRIVATE   = 'private';
+    }
+
+    class InlineHTML extends SingleStmt {
+        /** @var string */
+        private $html;
+
+        /**
+         * @param string $html
+         */
+        public function __construct($html) {
+            $this->html = $html;
+        }
+
+        function subStmts():array {
+            return [];
+        }
+    }
+
+    abstract class Classish extends SingleStmt {
+        private $name;
+
+        /**
+         * @param string $name
+         */
+        function __construct($name) {
+            $this->name = $name;
+        }
+
+        function name() {
+            return $this->name;
+        }
+
+        /**
+         * @return ClassMember[]
+         */
+        abstract function members();
+
+        function subStmts():array {
+            $stmts = [];
+            foreach ($this->members() as $member) {
+                foreach ($member->subStmts() as $stmt) {
+                    $stmts[] = $stmt;
+                }
+            }
+            return $stmts;
+        }
+
+        public function namespaces():array {
+            return array_merge(parent::namespaces(), [extract_namespace($this->name)]);
+        }
+    }
+
+    class Trait_ extends Classish {
+        /** @var ClassMember[] */
+        private $members = [];
+
+        /**
+         * @param string        $name
+         * @param ClassMember[] $members
+         */
+        public function __construct($name, array $members) {
+            parent::__construct($name);
+            $this->members = $members;
+        }
+
+        function members() {
+            return $this->members;
+        }
+    }
+
+    class Class_ extends Classish {
+        /** @var ClassMember */
+        private $members = [];
+        /** @var string|null */
+        private $parent;
+        /** @var string[] */
+        private $implements;
+
+        /**
+         * @param string        $name
+         * @param ClassMember[] $members
+         * @param string|null   $parent
+         * @param string[]      $implements
+         */
+        public function __construct($name, array $members, $parent = null, array $implements = []) {
+            parent::__construct($name);
+            $this->members    = $members;
+            $this->parent     = $parent;
+            $this->implements = $implements;
+        }
+
+        public function makeAnonymous():Expr\Expr {
+            return new If_(
+                new Expr\Not_(new Expr\FunctionCall(new Expr\Literal('class_exists'), [
+                    new Expr\CallArg(new Expr\Literal($this->name()), false, false),
+                    new Expr\CallArg(new Expr\Literal(false), false, false),
+                ])),
+                new Block([$this]),
+                new Block()
+            );
+        }
+
+        function members() {
+            return $this->members;
+        }
+    }
+
+    class Interface_ extends Classish {
+        /** @var Method_[] */
+        private $methods = [];
+
+        /**
+         * @param string    $name
+         * @param Method_[] $methods
+         */
+        public function __construct($name, array $methods) {
+            parent::__construct($name);
+            $this->methods = $methods;
+        }
+
+        public function members() {
+            return $this->methods;
+        }
+    }
+
+    function extract_namespace($name) {
+        $pos = strrpos($name, '\\');
+        if ($pos === false) {
+            return '';
+        } else {
+            return substr($name, 0, $pos);
+        }
+    }
+
+    class Function_ extends SingleStmt {
+        /** @var string */
+        private $name;
+        /** @var Stmt|null */
+        private $body;
+        /** @var FunctionSignature */
+        private $type;
+
+        /**
+         * @param string            $name
+         * @param FunctionSignature $type
+         * @param Stmt|null         $body
+         */
+        public function __construct($name, FunctionSignature $type, Stmt $body = null) {
+            $this->name = $name;
+            $this->type = $type;
+            $this->body = $body;
+        }
+
+        function subStmts():array {
+            $stmts = $this->type->subStmts();
+            if ($this->body) {
+                $stmts[] = $this->body;
+            }
+            return $stmts;
+        }
+
+        public function namespaces():array {
+            return array_merge(parent::namespaces(), [extract_namespace($this->name)]);
+        }
+    }
+
+    abstract class ClassMember {
+        /** @var string */
+        private $visibility;
+        /** @var bool */
+        private $static;
+
+        /**
+         * @param string $visibility
+         * @param bool   $static
+         */
+        public function __construct($visibility, $static) {
+            $this->visibility = $visibility;
+            $this->static     = $static;
+        }
+
+        public function visibility() {
+            return $this->visibility;
+        }
+
+        public function subStmts() {
+            return [];
+        }
+    }
+
+    class Property extends ClassMember {
+        /** @var string */
+        private $name;
+        /** @var Type\Type */
+        private $type;
+        /** @var Expr\Expr|null */
+        private $default = null;
+
+        /**
+         * @param string         $name
+         * @param Type\Type      $type
+         * @param Expr\Expr|null $default
+         * @param string         $visibility
+         * @param bool           $static
+         */
+        public function __construct($name, Type\Type $type, Expr\Expr $default = null, $visibility, $static) {
+            parent::__construct($visibility, $static);
+            $this->name    = $name;
+            $this->type    = $type;
+            $this->default = $default;
+        }
+
+        public function subStmts() {
+            return $this->default ? $this->default->subStmts() : [];
+        }
+    }
+
+    class FunctionSignature {
+        /** @var bool */
+        private $returnRef;
+        /** @var Type\Type */
+        private $returnType;
+        /** @var FunctionParam[] */
+        private $params = [];
+
+        /**
+         * @param bool            $returnRef
+         * @param FunctionParam[] $params
+         */
+        public function __construct($returnRef, array $params) {
+            $this->returnRef = $returnRef;
+            $this->params    = $params;
+        }
+
+        public function subStmts() {
+            $stmts = [];
+            foreach ($this->params as $param) {
+                foreach ($param->subStmts() as $stmt) {
+                    $stmts[] = $stmt;
+                }
+            }
+            return $stmts;
+        }
+    }
+
+    class Method_ extends ClassMember {
+        /** @var string */
+        private $name;
+        /** @var FunctionSignature */
+        private $type;
+        /** @var Stmt|null */
+        private $body;
+        /** @var bool */
+        private $final;
+
+        /**
+         * @param string            $name
+         * @param FunctionSignature $type
+         * @param Stmt|null         $body
+         * @param bool              $final
+         * @param string            $visibility
+         * @param bool              $static
+         */
+        public function __construct($name, FunctionSignature $type, Stmt $body = null, $final, $visibility, $static) {
+            parent::__construct($visibility, $static);
+            $this->final = $final;
+            $this->name  = $name;
+            $this->type  = $type;
+            $this->body  = $body;
+        }
+
+        public function isAbstract() {
+            return $this->body ? false : true;
+        }
+
+        public function isFinal() {
+            return $this->final ? true : false;
+        }
+
+        public function subStmts() {
+            $stmts = $this->type->subStmts();
+            if ($this->body) {
+                $stmts[] = $this->body;
+            }
+            return $stmts;
+        }
+    }
+
+    class FunctionParam {
+        /** @var string */
+        private $name;
+        /** @var Expr\Expr|null */
+        private $default = null;
+        /** @var bool */
+        private $passByRef;
+        /** @var bool */
+        private $variadic;
+
+        /**
+         * @param string         $name
+         * @param Expr\Expr|null $default
+         * @param bool           $passByRef
+         * @param bool           $variadic
+         */
+        public function __construct($name, Expr\Expr $default = null, $passByRef, $variadic) {
+            $this->name      = $name;
+            $this->default   = $default;
+            $this->passByRef = $passByRef;
+            $this->variadic  = $variadic;
+        }
+
+        public function subStmts() {
+            return $this->default ? [$this->default] : [];
+        }
+    }
+
+    class Foreach_ extends SingleStmt {
+        /** @var Expr\Expr */
+        private $array;
+        /** @var Expr\Expr|null */
+        private $key;
+        /** @var Expr\Expr */
+        private $value;
+        /** @var Stmt */
+        private $body;
+        /** @var bool */
+        private $byRef;
+
+        /**
+         * @param Expr\Expr      $array
+         * @param Expr\Expr|null $key
+         * @param Expr\Expr      $value
+         * @param bool           $byRef
+         * @param Stmt           $body
+         */
+        public function __construct(Expr\Expr $array, Expr\Expr $key = null, Expr\Expr $value, $byRef, Stmt $body) {
+            $this->array = $array;
+            $this->key   = $key;
+            $this->value = $value;
+            $this->body  = $body;
+            $this->byRef = $byRef;
+        }
+
+        function subStmts():array {
+            $stmts = [
+                $this->array,
+                $this->value,
+                $this->body,
+            ];
+            if ($this->key) {
+                $stmts[] = $this->key;
+            }
+            return $stmts;
+        }
+    }
+
+    class Echo_ extends SingleStmt {
+        /** @var Expr\Expr[] */
+        private $exprs;
+
+        /**
+         * @param Expr\Expr[] $exprs
+         */
+        public function __construct(array $exprs) {
+            $this->exprs = $exprs;
+        }
+
+        function subStmts():array {
+            return $this->exprs;
+        }
+    }
+
+    class Const_ extends SingleStmt {
+        /** @var string */
+        private $name;
+        /** @var Expr\Expr */
+        private $value;
+
+        /**
+         * @param string    $name
+         * @param Expr\Expr $value
+         */
+        public function __construct($name, Expr\Expr $value) {
+            $this->name  = $name;
+            $this->value = $value;
+        }
+
+        function subStmts():array {
+            return [$this->value];
+        }
+
+        public function namespaces():array {
+            return array_merge(parent::namespaces(), [extract_namespace($this->name)]);
+        }
+    }
+
+    class Throw_ extends SingleStmt {
+        /** @var Expr\Expr */
+        private $expr;
+
+        /**
+         * @param Expr\Expr $expr
+         */
+        public function __construct(Expr\Expr $expr) {
+            $this->expr = $expr;
+        }
+
+        function subStmts():array {
+            return [$this->expr];
+        }
+    }
+
+    class StaticVar extends SingleStmt {
+        /** @var string */
+        private $name;
+        /** @var Expr\Expr|null */
+        private $value;
+
+        /**
+         * @param string         $name
+         * @param Expr\Expr|null $value
+         */
+        public function __construct($name, Expr\Expr $value = null) {
+            $this->name  = $name;
+            $this->value = $value;
+        }
+
+        function subStmts():array {
+            return $this->value ? [$this->value] : [];
+        }
+    }
+
+    class For_ extends SingleStmt {
+        /** @var Expr\Expr[] */
+        private $init = [];
+        /** @var Expr\Expr[] */
+        private $cond = [];
+        /** @var Expr\Expr[] */
+        private $loop = [];
+        /** @var Stmt */
+        private $body;
+
+        /**
+         * @param Expr\Expr[] $init
+         * @param Expr\Expr[] $cond
+         * @param Expr\Expr[] $loop
+         * @param Stmt        $body
+         */
+        public function __construct(array $init, array $cond, array $loop, Stmt $body) {
+            $this->init = $init;
+            $this->cond = $cond;
+            $this->loop = $loop;
+            $this->body = $body;
+        }
+
+        function subStmts():array {
+            return array_merge(
+                $this->init,
+                $this->cond,
+                $this->loop,
+                [$this->body]
+            );
+        }
+    }
+
+    class Break_ extends SingleStmt {
+        /** @var int */
+        private $levels;
+
+        /**
+         * @param int $levels
+         */
+        public function __construct($levels = 1) {
+            $this->levels = $levels;
+        }
+
+        function subStmts():array {
+            return [];
+        }
+    }
+
+    class Continue_ extends SingleStmt {
+        /** @var int */
+        private $levels;
+
+        /**
+         * @param int $levels
+         */
+        public function __construct($levels) {
+            $this->levels = $levels;
+        }
+
+        function subStmts():array {
+            return [];
+        }
+    }
+
+    class Switch_ extends SingleStmt {
+        /** @var Expr\Expr */
+        private $expr;
+        /** @var Case_[] */
+        private $cases;
+
+        /**
+         * @param Expr\Expr $expr
+         * @param Case_[]   $cases
+         */
+        public function __construct(Expr\Expr $expr, array $cases) {
+            $this->expr  = $expr;
+            $this->cases = $cases;
+        }
+
+        function subStmts():array {
+            $stmts = [$this->expr];
+            foreach ($this->cases as $case) {
+                foreach ($case->subStmts() as $stmt) {
+                    $stmts[] = $stmt;
+                }
+            }
+            return $stmts;
+        }
+    }
+
+    class Case_ {
+        /** @var Expr\Expr|null */
+        private $expr;
+        /** @var Stmt */
+        private $stmt;
+
+        /**
+         * @param Expr\Expr|null $expr
+         * @param Stmt           $stmt
+         */
+        public function __construct(Expr\Expr $expr = null, Stmt $stmt) {
+            $this->expr = $expr;
+            $this->stmt = $stmt;
+        }
+
+        public function subStmts() {
+            $stmts = [$this->stmt];
+            if ($this->expr) {
+                $stmts[] = $this->expr;
+            }
+            return $stmts;
+        }
+    }
+
+    class Unset_ extends SingleStmt {
+        /** @var Expr\Expr[] */
+        private $exprs;
+
+        /**
+         * @param Expr\Expr[] $exprs
+         */
+        public function __construct(array $exprs) {
+            $this->exprs = $exprs;
+        }
+
+        function subStmts():array {
+            return $this->exprs;
+        }
+    }
+
+    class While_ extends SingleStmt {
+        /** @var Expr\Expr */
+        private $cond;
+        /** @var Stmt */
+        private $body;
+
+        /**
+         * @param Expr\Expr $cond
+         * @param Stmt      $body
+         */
+        public function __construct(Expr\Expr $cond, Stmt $body) {
+            $this->cond = $cond;
+            $this->body = $body;
+        }
+
+        function subStmts():array {
+            return [$this->cond, $this->body];
+        }
+    }
+
+    class Try_ extends SingleStmt {
+        /** @var Stmt */
+        private $body;
+        /** @var Catch_[] */
+        private $catches;
+
+        /**
+         * @param Stmt     $body
+         * @param Catch_[] $catches
+         */
+        public function __construct(Stmt $body, array $catches) {
+            $this->body    = $body;
+            $this->catches = $catches;
+        }
+
+        function subStmts():array {
+            $stmts = [$this->body];
+            foreach ($this->catches as $catch) {
+                foreach ($catch->subStmts() as $stmt) {
+                    $stmts[] = $stmt;
+                }
+            }
+            return $stmts;
+        }
+    }
+
+    class Catch_ {
+        /** @var string */
+        private $class;
+        /** @var string */
+        private $variable;
+        /** @var Stmt */
+        private $body;
+
+        /**
+         * @param string $class
+         * @param string $variable
+         * @param Stmt   $body
+         */
+        public function __construct($class, $variable, Stmt $body) {
+            $this->class    = $class;
+            $this->variable = $variable;
+            $this->body     = $body;
+        }
+
+        public function subStmts() {
+            return [$this->body];
+        }
+    }
+
+    class Global_ extends SingleStmt {
+        /** @var Expr\Expr */
+        private $expr;
+
+        /**
+         * @param Expr\Expr $expr
+         */
+        public function __construct(Expr\Expr $expr) {
+            $this->expr = $expr;
+        }
+
+        function subStmts():array {
+            return [$this->expr];
+        }
+    }
+
+    class Label_ extends SingleStmt {
+        /** @var string */
+        private $name;
+
+        /**
+         * @param string $name
+         */
+        public function __construct($name) {
+            $this->name = $name;
+        }
+
+        function subStmts():array {
+            return [];
+        }
+    }
+
+    class Goto_ extends SingleStmt {
+        /** @var string */
+        private $name;
+
+        /**
+         * @param string $name
+         */
+        public function __construct($name) {
+            $this->name = $name;
+        }
+
+        function subStmts():array {
+            return [];
+        }
+    }
+}
+
+namespace JesseSchalken\PhpTypeChecker\Node\Expr {
+
+    use JesseSchalken\PhpTypeChecker\Node\Stmt;
+
+    abstract class Expr extends Stmt\SingleStmt {
         public function isLValue() {
             return false;
+        }
+    }
+
+    class List_ extends Expr {
+        /** @var (Expr|null)[] */
+        private $exprs;
+
+        /**
+         * @param (Expr|null)[] $exprs
+         */
+        public function __construct(array $exprs) {
+            $this->exprs = $exprs;
+        }
+
+        function subStmts():array {
+            $stmts = [];
+            foreach ($this->exprs as $expr) {
+                if ($expr) {
+                    $stmts[] = $expr;
+                }
+            }
+            return $stmts;
+        }
+    }
+
+    class Yield_ extends Expr {
+        /** @var Expr|null */
+        private $key;
+        /** @var Expr|null */
+        private $value;
+
+        /**
+         * @param Expr|null $key
+         * @param Expr|null $value
+         */
+        public function __construct(Expr $key = null, Expr $value = null) {
+            $this->key   = $key;
+            $this->value = $value;
+        }
+
+        function subStmts():array {
+            $stmts = [];
+            if ($this->key) {
+                $stmts[] = $this->key;
+            }
+            if ($this->value) {
+                $stmts[] = $this->value;
+            }
+            return $stmts;
         }
     }
 
@@ -1478,19 +2251,6 @@ namespace JesseSchalken\PhpTypeChecker\Node {
 
         function subStmts():array {
             return [$this->class];
-        }
-    }
-
-    class Return_ extends SingleStmt {
-        /** @var Expr|null */
-        private $expr;
-
-        public function __construct(Expr $expr = null) {
-            $this->expr = $expr;
-        }
-
-        function subStmts():array {
-            return $this->expr ? [$this->expr] : [];
         }
     }
 
@@ -1754,64 +2514,6 @@ namespace JesseSchalken\PhpTypeChecker\Node {
         }
     }
 
-    class Visibility {
-        const PUBLIC    = 'public';
-        const PROTECTED = 'protected';
-        const PRIVATE   = 'private';
-    }
-
-    abstract class Classish extends SingleStmt {
-        private $name;
-
-        /**
-         * @param string $name
-         */
-        function __construct($name) {
-            $this->name = $name;
-        }
-
-        function name() {
-            return $this->name;
-        }
-
-        /**
-         * @return ClassMember[]
-         */
-        abstract function members();
-
-        function subStmts():array {
-            $stmts = [];
-            foreach ($this->members() as $member) {
-                foreach ($member->subStmts() as $stmt) {
-                    $stmts[] = $stmt;
-                }
-            }
-            return $stmts;
-        }
-
-        public function namespaces():array {
-            return array_merge(parent::namespaces(), [extract_namespace($this->name)]);
-        }
-    }
-
-    class Trait_ extends Classish {
-        /** @var ClassMember[] */
-        private $members = [];
-
-        /**
-         * @param string        $name
-         * @param ClassMember[] $members
-         */
-        public function __construct($name, array $members) {
-            parent::__construct($name);
-            $this->members = $members;
-        }
-
-        function members() {
-            return $this->members;
-        }
-    }
-
     class Not_ extends Expr {
         /** @var Expr */
         private $expr;
@@ -1822,255 +2524,6 @@ namespace JesseSchalken\PhpTypeChecker\Node {
 
         function subStmts():array {
             return [$this->expr];
-        }
-    }
-
-    class Class_ extends Classish {
-        /** @var ClassMember */
-        private $members = [];
-        /** @var string|null */
-        private $parent;
-        /** @var string[] */
-        private $implements;
-
-        /**
-         * @param string        $name
-         * @param ClassMember[] $members
-         * @param string|null   $parent
-         * @param string[]      $implements
-         */
-        public function __construct($name, array $members, $parent = null, array $implements = []) {
-            parent::__construct($name);
-            $this->members    = $members;
-            $this->parent     = $parent;
-            $this->implements = $implements;
-        }
-
-        public function makeAnonymous():Expr {
-            return new If_(
-                new Not_(new FunctionCall(new Literal('class_exists'), [
-                    new CallArg(new Literal($this->name()), false, false),
-                    new CallArg(new Literal(false), false, false),
-                ])),
-                new StmtBlock([$this]),
-                new StmtBlock()
-            );
-        }
-
-        function members() {
-            return $this->members;
-        }
-    }
-
-    class Interface_ extends Classish {
-        /** @var Method_[] */
-        private $methods = [];
-
-        /**
-         * @param string    $name
-         * @param Method_[] $methods
-         */
-        public function __construct($name, array $methods) {
-            parent::__construct($name);
-            $this->methods = $methods;
-        }
-
-        public function members() {
-            return $this->methods;
-        }
-    }
-
-    function extract_namespace($name) {
-        $pos = strrpos($name, '\\');
-        if ($pos === false) {
-            return '';
-        } else {
-            return substr($name, 0, $pos);
-        }
-    }
-
-    class Function_ extends SingleStmt {
-        /** @var string */
-        private $name;
-        /** @var Stmt|null */
-        private $body;
-        /** @var FunctionSignature */
-        private $type;
-
-        /**
-         * @param string            $name
-         * @param FunctionSignature $type
-         * @param Stmt|null         $body
-         */
-        public function __construct($name, FunctionSignature $type, Stmt $body = null) {
-            $this->name = $name;
-            $this->type = $type;
-            $this->body = $body;
-        }
-
-        function subStmts():array {
-            $stmts = $this->type->subStmts();
-            if ($this->body) {
-                $stmts[] = $this->body;
-            }
-            return $stmts;
-        }
-
-        public function namespaces():array {
-            return array_merge(parent::namespaces(), [extract_namespace($this->name)]);
-        }
-    }
-
-    class Type {
-    }
-
-    abstract class ClassMember {
-        /** @var string */
-        private $visibility;
-        /** @var bool */
-        private $static;
-
-        /**
-         * @param string $visibility
-         * @param bool   $static
-         */
-        public function __construct($visibility, $static) {
-            $this->visibility = $visibility;
-            $this->static     = $static;
-        }
-
-        public function visibility() {
-            return $this->visibility;
-        }
-
-        public function subStmts() {
-            return [];
-        }
-    }
-
-    class Property extends ClassMember {
-        /** @var string */
-        private $name;
-        /** @var Type */
-        private $type;
-        /** @var Expr|null */
-        private $default = null;
-
-        /**
-         * @param string    $name
-         * @param Type      $type
-         * @param Expr|null $default
-         * @param string    $visibility
-         * @param bool      $static
-         */
-        public function __construct($name, Type $type, Expr $default = null, $visibility, $static) {
-            parent::__construct($visibility, $static);
-            $this->name    = $name;
-            $this->type    = $type;
-            $this->default = $default;
-        }
-
-        public function subStmts() {
-            return $this->default ? $this->default->subStmts() : [];
-        }
-    }
-
-    class FunctionSignature {
-        /** @var bool */
-        private $returnRef;
-        /** @var Type */
-        private $returnType;
-        /** @var FunctionParam[] */
-        private $params = [];
-
-        /**
-         * @param bool            $returnRef
-         * @param FunctionParam[] $params
-         */
-        public function __construct($returnRef, array $params) {
-            $this->returnRef = $returnRef;
-            $this->params    = $params;
-        }
-
-        public function subStmts() {
-            $stmts = [];
-            foreach ($this->params as $param) {
-                foreach ($param->subStmts() as $stmt) {
-                    $stmts[] = $stmt;
-                }
-            }
-            return $stmts;
-        }
-    }
-
-    class Method_ extends ClassMember {
-        /** @var string */
-        private $name;
-        /** @var FunctionSignature */
-        private $type;
-        /** @var Stmt|null */
-        private $body;
-        /** @var bool */
-        private $final;
-
-        /**
-         * @param string            $name
-         * @param FunctionSignature $type
-         * @param Stmt|null         $body
-         * @param bool              $final
-         * @param string            $visibility
-         * @param bool              $static
-         */
-        public function __construct($name, FunctionSignature $type, Stmt $body = null, $final, $visibility, $static) {
-            parent::__construct($visibility, $static);
-            $this->final = $final;
-            $this->name  = $name;
-            $this->type  = $type;
-            $this->body  = $body;
-        }
-
-        public function isAbstract() {
-            return $this->body ? false : true;
-        }
-
-        public function isFinal() {
-            return $this->final ? true : false;
-        }
-
-        public function subStmts() {
-            $stmts = $this->type->subStmts();
-            if ($this->body) {
-                $stmts[] = $this->body;
-            }
-            return $stmts;
-        }
-    }
-
-    class FunctionParam {
-        /** @var string */
-        private $name;
-        /** @var Expr|null */
-        private $default = null;
-        /** @var bool */
-        private $passByRef;
-        /** @var bool */
-        private $variadic;
-
-        /**
-         * @param string    $name
-         * @param Expr|null $default
-         * @param bool      $passByRef
-         * @param bool      $variadic
-         */
-        public function __construct($name, Expr $default = null, $passByRef, $variadic) {
-            $this->name      = $name;
-            $this->default   = $default;
-            $this->passByRef = $passByRef;
-            $this->variadic  = $variadic;
-        }
-
-        public function subStmts() {
-            return $this->default ? [$this->default] : [];
         }
     }
 
@@ -2177,20 +2630,20 @@ namespace JesseSchalken\PhpTypeChecker\Node {
     class Closure extends Expr {
         /** @var bool */
         private $static;
-        /** @var FunctionSignature */
+        /** @var Stmt\FunctionSignature */
         private $type;
         /** @var ClosureUse[] */
         private $uses;
-        /** @var Stmt */
+        /** @var Stmt\Stmt */
         private $body;
 
         /**
-         * @param bool              $static
-         * @param FunctionSignature $type
-         * @param ClosureUse[]      $uses
-         * @param Stmt              $body
+         * @param bool                   $static
+         * @param Stmt\FunctionSignature $type
+         * @param ClosureUse[]           $uses
+         * @param Stmt\Stmt              $body
          */
-        public function __construct($static, FunctionSignature $type, array $uses, Stmt $body) {
+        public function __construct($static, Stmt\FunctionSignature $type, array $uses, Stmt\Stmt $body) {
             $this->static = $static;
             $this->type   = $type;
             $this->uses   = $uses;
@@ -2265,62 +2718,6 @@ namespace JesseSchalken\PhpTypeChecker\Node {
     }
 
     class Isset_ extends Expr {
-        /** @var Expr[] */
-        private $exprs;
-
-        /**
-         * @param Expr[] $exprs
-         */
-        public function __construct(array $exprs) {
-            $this->exprs = $exprs;
-        }
-
-        function subStmts():array {
-            return $this->exprs;
-        }
-    }
-
-    class Foreach_ extends SingleStmt {
-        /** @var Expr */
-        private $array;
-        /** @var Expr|null */
-        private $key;
-        /** @var Expr */
-        private $value;
-        /** @var Stmt */
-        private $body;
-        /** @var bool */
-        private $byRef;
-
-        /**
-         * @param Expr      $array
-         * @param Expr|null $key
-         * @param Expr      $value
-         * @param bool      $byRef
-         * @param Stmt      $body
-         */
-        public function __construct(Expr $array, Expr $key = null, Expr $value, $byRef, Stmt $body) {
-            $this->array = $array;
-            $this->key   = $key;
-            $this->value = $value;
-            $this->body  = $body;
-            $this->byRef = $byRef;
-        }
-
-        function subStmts():array {
-            $stmts = [
-                $this->array,
-                $this->value,
-                $this->body,
-            ];
-            if ($this->key) {
-                $stmts[] = $this->key;
-            }
-            return $stmts;
-        }
-    }
-
-    class Echo_ extends SingleStmt {
         /** @var Expr[] */
         private $exprs;
 
@@ -2478,22 +2875,6 @@ namespace JesseSchalken\PhpTypeChecker\Node {
         }
     }
 
-    class InlineHTML extends Expr {
-        /** @var string */
-        private $html;
-
-        /**
-         * @param string $html
-         */
-        public function __construct($html) {
-            $this->html = $html;
-        }
-
-        function subStmts():array {
-            return [];
-        }
-    }
-
     class Exit_ extends Expr {
         /** @var Expr|null */
         private $expr;
@@ -2507,364 +2888,6 @@ namespace JesseSchalken\PhpTypeChecker\Node {
 
         function subStmts():array {
             return $this->expr ? [$this->expr] : [];
-        }
-    }
-
-    class Const_ extends SingleStmt {
-        /** @var string */
-        private $name;
-        /** @var Expr */
-        private $value;
-
-        /**
-         * @param string $name
-         * @param Expr   $value
-         */
-        public function __construct($name, Expr $value) {
-            $this->name  = $name;
-            $this->value = $value;
-        }
-
-        function subStmts():array {
-            return [$this->value];
-        }
-
-        public function namespaces():array {
-            return array_merge(parent::namespaces(), [extract_namespace($this->name)]);
-        }
-    }
-
-    class Throw_ extends SingleStmt {
-        /** @var Expr */
-        private $expr;
-
-        /**
-         * @param Expr $expr
-         */
-        public function __construct(Expr $expr) {
-            $this->expr = $expr;
-        }
-
-        function subStmts():array {
-            return [$this->expr];
-        }
-    }
-
-    class StaticVar extends SingleStmt {
-        /** @var string */
-        private $name;
-        /** @var Expr|null */
-        private $value;
-
-        /**
-         * @param string    $name
-         * @param Expr|null $value
-         */
-        public function __construct($name, Expr $value = null) {
-            $this->name  = $name;
-            $this->value = $value;
-        }
-
-        function subStmts():array {
-            return $this->value ? [$this->value] : [];
-        }
-    }
-
-    class For_ extends SingleStmt {
-        /** @var Expr[] */
-        private $init = [];
-        /** @var Expr[] */
-        private $cond = [];
-        /** @var Expr[] */
-        private $loop = [];
-        /** @var Stmt */
-        private $body;
-
-        /**
-         * @param Expr[] $init
-         * @param Expr[] $cond
-         * @param Expr[] $loop
-         * @param Stmt   $body
-         */
-        public function __construct(array $init, array $cond, array $loop, Stmt $body) {
-            $this->init = $init;
-            $this->cond = $cond;
-            $this->loop = $loop;
-            $this->body = $body;
-        }
-
-        function subStmts():array {
-            return array_merge(
-                $this->init,
-                $this->cond,
-                $this->loop,
-                [$this->body]
-            );
-        }
-    }
-
-    class Break_ extends SingleStmt {
-        /** @var int */
-        private $levels;
-
-        /**
-         * @param int $levels
-         */
-        public function __construct($levels = 1) {
-            $this->levels = $levels;
-        }
-
-        function subStmts():array {
-            return [];
-        }
-    }
-
-    class Continue_ extends SingleStmt {
-        /** @var int */
-        private $levels;
-
-        /**
-         * @param int $levels
-         */
-        public function __construct($levels) {
-            $this->levels = $levels;
-        }
-
-        function subStmts():array {
-            return [];
-        }
-    }
-
-    class Yield_ extends Expr {
-        /** @var Expr|null */
-        private $key;
-        /** @var Expr|null */
-        private $value;
-
-        /**
-         * @param Expr|null $key
-         * @param Expr|null $value
-         */
-        public function __construct(Expr $key = null, Expr $value = null) {
-            $this->key   = $key;
-            $this->value = $value;
-        }
-
-        function subStmts():array {
-            $stmts = [];
-            if ($this->key) {
-                $stmts[] = $this->key;
-            }
-            if ($this->value) {
-                $stmts[] = $this->value;
-            }
-            return $stmts;
-        }
-    }
-
-    class Switch_ extends SingleStmt {
-        /** @var Expr */
-        private $expr;
-        /** @var Case_[] */
-        private $cases;
-
-        /**
-         * @param Expr    $expr
-         * @param Case_[] $cases
-         */
-        public function __construct(Expr $expr, array $cases) {
-            $this->expr  = $expr;
-            $this->cases = $cases;
-        }
-
-        function subStmts():array {
-            $stmts = [$this->expr];
-            foreach ($this->cases as $case) {
-                foreach ($case->subStmts() as $stmt) {
-                    $stmts[] = $stmt;
-                }
-            }
-            return $stmts;
-        }
-    }
-
-    class Case_ {
-        /** @var Expr|null */
-        private $expr;
-        /** @var Stmt */
-        private $stmt;
-
-        /**
-         * @param Expr|null $expr
-         * @param Stmt      $stmt
-         */
-        public function __construct(Expr $expr = null, Stmt $stmt) {
-            $this->expr = $expr;
-            $this->stmt = $stmt;
-        }
-
-        public function subStmts() {
-            $stmts = [$this->stmt];
-            if ($this->expr) {
-                $stmts[] = $this->expr;
-            }
-            return $stmts;
-        }
-    }
-
-    class Unset_ extends SingleStmt {
-        /** @var Expr[] */
-        private $exprs;
-
-        /**
-         * @param Expr[] $exprs
-         */
-        public function __construct(array $exprs) {
-            $this->exprs = $exprs;
-        }
-
-        function subStmts():array {
-            return $this->exprs;
-        }
-    }
-
-    class While_ extends SingleStmt {
-        /** @var Expr */
-        private $cond;
-        /** @var Stmt */
-        private $body;
-
-        /**
-         * @param Expr $cond
-         * @param Stmt $body
-         */
-        public function __construct(Expr $cond, Stmt $body) {
-            $this->cond = $cond;
-            $this->body = $body;
-        }
-
-        function subStmts():array {
-            return [$this->cond, $this->body];
-        }
-    }
-
-    class List_ extends Expr {
-        /** @var (Expr|null)[] */
-        private $exprs;
-
-        /**
-         * @param (Expr|null)[] $exprs
-         */
-        public function __construct(array $exprs) {
-            $this->exprs = $exprs;
-        }
-
-        function subStmts():array {
-            $stmts = [];
-            foreach ($this->exprs as $expr) {
-                if ($expr) {
-                    $stmts[] = $expr;
-                }
-            }
-            return $stmts;
-        }
-    }
-
-    class Try_ extends SingleStmt {
-        /** @var Stmt */
-        private $body;
-        /** @var Catch_[] */
-        private $catches;
-
-        /**
-         * @param Stmt     $body
-         * @param Catch_[] $catches
-         */
-        public function __construct(Stmt $body, array $catches) {
-            $this->body    = $body;
-            $this->catches = $catches;
-        }
-
-        function subStmts():array {
-            $stmts = [$this->body];
-            foreach ($this->catches as $catch) {
-                foreach ($catch->subStmts() as $stmt) {
-                    $stmts[] = $stmt;
-                }
-            }
-            return $stmts;
-        }
-    }
-
-    class Catch_ {
-        /** @var string */
-        private $class;
-        /** @var string */
-        private $variable;
-        /** @var Stmt */
-        private $body;
-
-        /**
-         * @param string $class
-         * @param string $variable
-         * @param Stmt   $body
-         */
-        public function __construct($class, $variable, Stmt $body) {
-            $this->class    = $class;
-            $this->variable = $variable;
-            $this->body     = $body;
-        }
-
-        public function subStmts() {
-            return [$this->body];
-        }
-    }
-
-    class Global_ extends SingleStmt {
-        /** @var Expr */
-        private $expr;
-
-        /**
-         * @param Expr $expr
-         */
-        public function __construct(Expr $expr) {
-            $this->expr = $expr;
-        }
-
-        function subStmts():array {
-            return [$this->expr];
-        }
-    }
-
-    class Label_ extends SingleStmt {
-        /** @var string */
-        private $name;
-
-        /**
-         * @param string $name
-         */
-        public function __construct($name) {
-            $this->name = $name;
-        }
-
-        function subStmts():array {
-            return [];
-        }
-    }
-
-    class Goto_ extends SingleStmt {
-        /** @var string */
-        private $name;
-
-        /**
-         * @param string $name
-         */
-        public function __construct($name) {
-            $this->name = $name;
-        }
-
-        function subStmts():array {
-            return [];
         }
     }
 
@@ -2930,5 +2953,10 @@ namespace JesseSchalken\PhpTypeChecker\Node {
         function subStmts():array {
             return [];
         }
+    }
+}
+
+namespace JesseSchalken\PhpTypeChecker\Node\Type {
+    class Type {
     }
 }

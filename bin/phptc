@@ -21,7 +21,7 @@ namespace JesseSchalken\PhpTypeChecker {
                 }
             }
             return $result;
-        } elseif (pathinfo($input, PATHINFO_EXTENSION) === 'php') {
+        } else if (pathinfo($input, PATHINFO_EXTENSION) === 'php') {
             return [$input];
         } else {
             return [];
