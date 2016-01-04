@@ -7,7 +7,7 @@ namespace JesseSchalken\PhpTypeChecker\Node {
     use JesseSchalken\PhpTypeChecker\Node\Type;
     use JesseSchalken\PhpTypeChecker\Parser;
 
-    class CodeLocation {
+    class CodeLoc {
         /** @var string */
         private $path;
         /** @var int */
@@ -36,8 +36,8 @@ namespace JesseSchalken\PhpTypeChecker\Node {
     }
 
     class ErrorReceiver {
-        function add($message, CodeLocation $location) {
-            print $location->format($message);
+        function add($message, CodeLoc $loc) {
+            print $loc->format($message);
         }
     }
 
@@ -129,12 +129,15 @@ namespace JesseSchalken\PhpTypeChecker\Node {
             return $this->shebang . (new \PhpParser\PrettyPrinter\Standard())->prettyPrintFile($nodes);
         }
     }
+
+    abstract class Node {
+    }
 }
 
 namespace JesseSchalken\PhpTypeChecker\Parser {
 
     use JesseSchalken\MagicUtils\DeepClone;
-    use JesseSchalken\PhpTypeChecker\Node\CodeLocation;
+    use JesseSchalken\PhpTypeChecker\Node\CodeLoc;
     use JesseSchalken\PhpTypeChecker\Node\ErrorReceiver;
     use JesseSchalken\PhpTypeChecker\Node\Expr;
     use JesseSchalken\PhpTypeChecker\Node\Stmt;
@@ -435,16 +438,16 @@ namespace JesseSchalken\PhpTypeChecker\Parser {
             }
         }
 
-        public function locateError(\PhpParser\Error $error):CodeLocation {
+        public function locateError(\PhpParser\Error $error):CodeLoc {
             $line = $this->lineOffset + $error->getStartLine();
             $col  = $this->offsetToColumn($error->hasColumnInfo() ? $error->getAttributes()['startFilePos'] : null);
-            return new CodeLocation($this->path, $line, $col);
+            return new CodeLoc($this->path, $line, $col);
         }
 
-        public function locateNode(\PhpParser\Node $node):CodeLocation {
+        public function locateNode(\PhpParser\Node $node):CodeLoc {
             $line = $this->lineOffset + $node->getLine();
             $col  = $this->offsetToColumn($node->getAttribute('startFilePos'));
-            return new CodeLocation($this->path, $line, $col);
+            return new CodeLoc($this->path, $line, $col);
         }
 
         /**
@@ -534,6 +537,10 @@ namespace JesseSchalken\PhpTypeChecker\Parser {
             clone_ref($this->trait);
             clone_ref($this->parent);
             clone_ref($this->function);
+        }
+
+        private function locateNode(\PhpParser\Node $node):CodeLoc {
+            return $this->file->locateNode($node);
         }
 
         /**
@@ -1351,12 +1358,13 @@ namespace JesseSchalken\PhpTypeChecker\Parser {
 namespace JesseSchalken\PhpTypeChecker\Node\Stmt {
 
     use JesseSchalken\PhpTypeChecker\Node\Expr;
+    use JesseSchalken\PhpTypeChecker\Node\Node;
     use JesseSchalken\PhpTypeChecker\Node\Type;
     use JesseSchalken\PhpTypeChecker\Parser;
     use function JesseSchalken\MagicUtils\clone_ref;
     use function JesseSchalken\PhpTypeChecker\recursive_scan2;
 
-    abstract class Stmt {
+    abstract class Stmt extends Node {
         /**
          * @return SingleStmt[]
          */
@@ -1643,7 +1651,7 @@ namespace JesseSchalken\PhpTypeChecker\Node\Stmt {
         }
     }
 
-    abstract class ClassMember {
+    abstract class ClassMember extends Node {
         /** @var string */
         private $visibility;
         /** @var bool */
@@ -1694,7 +1702,7 @@ namespace JesseSchalken\PhpTypeChecker\Node\Stmt {
         }
     }
 
-    class FunctionSignature {
+    class FunctionSignature extends Node {
         /** @var bool */
         private $returnRef;
         /** @var Type\Type */
@@ -1765,7 +1773,7 @@ namespace JesseSchalken\PhpTypeChecker\Node\Stmt {
         }
     }
 
-    class FunctionParam {
+    class FunctionParam extends Node {
         /** @var string */
         private $name;
         /** @var Expr\Expr|null */
@@ -2000,7 +2008,7 @@ namespace JesseSchalken\PhpTypeChecker\Node\Stmt {
         }
     }
 
-    class Case_ {
+    class Case_ extends Node {
         /** @var Expr\Expr|null */
         private $expr;
         /** @var Stmt */
@@ -2086,7 +2094,7 @@ namespace JesseSchalken\PhpTypeChecker\Node\Stmt {
         }
     }
 
-    class Catch_ {
+    class Catch_ extends Node {
         /** @var string */
         private $class;
         /** @var string */
@@ -2162,6 +2170,7 @@ namespace JesseSchalken\PhpTypeChecker\Node\Stmt {
 namespace JesseSchalken\PhpTypeChecker\Node\Expr {
 
     use JesseSchalken\PhpTypeChecker\Node\Stmt;
+    use JesseSchalken\PhpTypeChecker\Node\Node;
 
     abstract class Expr extends Stmt\SingleStmt {
         public function isLValue() {
@@ -2492,7 +2501,7 @@ namespace JesseSchalken\PhpTypeChecker\Node\Expr {
         }
     }
 
-    class CallArg {
+    class CallArg extends Node {
         /** @var Expr */
         private $expr;
         private $byRef = false;
@@ -2549,7 +2558,7 @@ namespace JesseSchalken\PhpTypeChecker\Node\Expr {
         }
     }
 
-    class ArrayItem {
+    class ArrayItem extends Node {
         /** @var Expr|null */
         private $key;
         /** @var Expr */
@@ -2657,7 +2666,7 @@ namespace JesseSchalken\PhpTypeChecker\Node\Expr {
         }
     }
 
-    class ClosureUse {
+    class ClosureUse extends Node {
         /** @var string */
         private $name;
         /** @var bool */
@@ -2957,6 +2966,9 @@ namespace JesseSchalken\PhpTypeChecker\Node\Expr {
 }
 
 namespace JesseSchalken\PhpTypeChecker\Node\Type {
-    class Type {
+
+    use JesseSchalken\PhpTypeChecker\Node\Node;
+
+    class Type extends Node {
     }
 }
