@@ -203,8 +203,8 @@ class DefinedNamesConstants extends DefinedNames {
         $pos = strrpos($name, '\\');
         $pos = $pos === false ? 0 : $pos + 1;
 
-        $prefix   = substr($name, $pos);
-        $constant = substr($name, 0, $pos);
+        $prefix   = substr($name, 0, $pos);
+        $constant = substr($name, $pos);
 
         return strtolower($prefix) . $constant;
     }
