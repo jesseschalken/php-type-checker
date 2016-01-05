@@ -588,7 +588,7 @@ namespace JesseSchalken\PhpTypeChecker\Parser {
          * @return string
          */
         private function resolveFunction(\PhpParser\Node\Name $name) {
-            return $this->useConstant->resolve($name, $this->useClass)->toString();
+            return $this->useFunction->resolve($name, $this->useClass)->toString();
         }
 
         /**
