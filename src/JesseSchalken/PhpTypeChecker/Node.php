@@ -1496,7 +1496,7 @@ namespace JesseSchalken\PhpTypeChecker\Node\Stmt {
                         )],
                         $if_->elseifs
                     );
-                    $else    = $if_->else;
+                    $else    = $if_->else ? $if_->else->stmts : [];
                 }
             }
 
@@ -1505,7 +1505,7 @@ namespace JesseSchalken\PhpTypeChecker\Node\Stmt {
                 [
                     'stmts'   => $this->true->unparse(),
                     'elseifs' => $elseIfs,
-                    'else'    => $else,
+                    'else'    => $else ? new \PhpParser\Node\Stmt\Else_($else) : null,
                 ]
             )];
         }
@@ -1813,7 +1813,7 @@ namespace JesseSchalken\PhpTypeChecker\Node\Stmt {
             return [
                 'byRef'      => $this->returnRef,
                 'params'     => $params,
-                'returnType' => $this->returnType->unparse(),
+                'returnType' => $this->returnType ? $this->returnType->unparse() : null,
             ];
         }
     }
@@ -3308,10 +3308,99 @@ namespace JesseSchalken\PhpTypeChecker\Node\Expr {
         }
 
         public function unparse_():\PhpParser\Node\Expr {
+            switch ($this->type) {
+                case self::INSTANCEOF:
+                    return new \PhpParser\Node\Expr\Instanceof_(
+                        $this->left->unparse_(),
+                        $this->right->unparseOrName()
+                    );
+            }
             $left  = $this->left->unparse_();
             $right = $this->right->unparse_();
-            // TOOD
             switch ($this->type) {
+                case self::ADD:
+                    return new \PhpParser\Node\Expr\BinaryOp\Plus($left, $right);
+                case self::SUBTRACT:
+                    return new \PhpParser\Node\Expr\BinaryOp\Minus($left, $right);
+                case self::MULTIPLY:
+                    return new \PhpParser\Node\Expr\BinaryOp\Mul($left, $right);
+                case self::DIVIDE:
+                    return new \PhpParser\Node\Expr\BinaryOp\Div($left, $right);
+                case self::MODULUS:
+                    return new \PhpParser\Node\Expr\BinaryOp\Mod($left, $right);
+                case self::EXPONENT:
+                    return new \PhpParser\Node\Expr\BinaryOp\Pow($left, $right);
+                case self::BIT_AND:
+                    return new \PhpParser\Node\Expr\BinaryOp\BitwiseAnd($left, $right);
+                case self::BIT_OR:
+                    return new \PhpParser\Node\Expr\BinaryOp\BitwiseOr($left, $right);
+                case self::BIT_XOR:
+                    return new \PhpParser\Node\Expr\BinaryOp\BitwiseXor($left, $right);
+                case self::SHIFT_LEFT:
+                    return new \PhpParser\Node\Expr\BinaryOp\ShiftLeft($left, $right);
+                case self::SHIFT_RIGHT:
+                    return new \PhpParser\Node\Expr\BinaryOp\ShiftRight($left, $right);
+                case self::EQUAL:
+                    return new \PhpParser\Node\Expr\BinaryOp\Equal($left, $right);
+                case self::IDENTICAL:
+                    return new \PhpParser\Node\Expr\BinaryOp\Identical($left, $right);
+                case self::NOT_EQUAL:
+                    return new \PhpParser\Node\Expr\BinaryOp\NotEqual($left, $right);
+                case self::NOT_IDENTICAL:
+                    return new \PhpParser\Node\Expr\BinaryOp\NotIdentical($left, $right);
+                case self::GREATER:
+                    return new \PhpParser\Node\Expr\BinaryOp\Greater($left, $right);
+                case self::LESS:
+                    return new \PhpParser\Node\Expr\BinaryOp\Smaller($left, $right);
+                case self::GREATER_OR_EQUAL:
+                    return new \PhpParser\Node\Expr\BinaryOp\GreaterOrEqual($left, $right);
+                case self::LESS_OR_EQUAL:
+                    return new \PhpParser\Node\Expr\BinaryOp\SmallerOrEqual($left, $right);
+                case self::SPACESHIP:
+                    return new \PhpParser\Node\Expr\BinaryOp\Spaceship($left, $right);
+                case self::COALESCE:
+                    return new \PhpParser\Node\Expr\BinaryOp\Coalesce($left, $right);
+                case self::BOOl_AND:
+                    return new \PhpParser\Node\Expr\BinaryOp\BooleanAnd($left, $right);
+                case self::BOOl_OR:
+                    return new \PhpParser\Node\Expr\BinaryOp\BooleanOr($left, $right);
+                case self::LOGIC_AND:
+                    return new \PhpParser\Node\Expr\BinaryOp\LogicalAnd($left, $right);
+                case self::LOGIC_OR:
+                    return new \PhpParser\Node\Expr\BinaryOp\LogicalOr($left, $right);
+                case self::LOGIC_XOR:
+                    return new \PhpParser\Node\Expr\BinaryOp\LogicalXor($left, $right);
+                case self::CONCAT:
+                    return new \PhpParser\Node\Expr\BinaryOp\Concat($left, $right);
+                case self::ASSIGN:
+                    return new \PhpParser\Node\Expr\Assign($left, $right);
+                case self::ASSIGN_REF:
+                    return new \PhpParser\Node\Expr\AssignRef($left, $right);
+                case self::ASSIGN_ADD:
+                    return new \PhpParser\Node\Expr\AssignOp\Plus($left, $right);
+                case self::ASSIGN_SUBTRACT:
+                    return new \PhpParser\Node\Expr\AssignOp\Minus($left, $right);
+                case self::ASSIGN_MULTIPLY:
+                    return new \PhpParser\Node\Expr\AssignOp\Mul($left, $right);
+                case self::ASSIGN_DIVIDE:
+                    return new \PhpParser\Node\Expr\AssignOp\Div($left, $right);
+                case self::ASSIGN_MODULUS:
+                    return new \PhpParser\Node\Expr\AssignOp\Mod($left, $right);
+                case self::ASSIGN_EXPONENT:
+                    return new \PhpParser\Node\Expr\AssignOp\Pow($left, $right);
+                case self::ASSIGN_CONCAT:
+                    return new \PhpParser\Node\Expr\AssignOp\Concat($left, $right);
+                case self::ASSIGN_BIT_AND:
+                    return new \PhpParser\Node\Expr\AssignOp\BitwiseAnd($left, $right);
+                case self::ASSIGN_BIT_OR:
+                    return new \PhpParser\Node\Expr\AssignOp\BitwiseOr($left, $right);
+                case self::ASSIGN_BIT_XOR:
+                    return new \PhpParser\Node\Expr\AssignOp\BitwiseXor($left, $right);
+                case self::ASSIGN_SHIFT_LEFT:
+                    return new \PhpParser\Node\Expr\AssignOp\ShiftLeft($left, $right);
+                case self::ASSIGN_SHIFT_RIGHT:
+                    return new \PhpParser\Node\Expr\AssignOp\ShiftRight($left, $right);
+
                 default:
                     throw new \Exception('Invalid binary operator type: ' . $this->type);
             }
@@ -3403,8 +3492,33 @@ namespace JesseSchalken\PhpTypeChecker\Node\Expr {
 
         public function unparse_():\PhpParser\Node\Expr {
             $expr = $this->expr->unparse_();
-            // TODO
             switch ($this->type) {
+                case self::PRE_INC:
+                    return new \PhpParser\Node\Expr\PreInc($expr);
+                case self::PRE_DEC:
+                    return new \PhpParser\Node\Expr\PreDec($expr);
+                case self::POST_INC:
+                    return new \PhpParser\Node\Expr\PostInc($expr);
+                case self::POST_DEC:
+                    return new \PhpParser\Node\Expr\PostDec($expr);
+                case self::PRINT:
+                    return new \PhpParser\Node\Expr\Print_($expr);
+                case self::BOOL_NOT:
+                    return new \PhpParser\Node\Expr\BooleanNot($expr);
+                case self::BIT_NOT:
+                    return new \PhpParser\Node\Expr\BitwiseNot($expr);
+                case self::PLUS:
+                    return new \PhpParser\Node\Expr\UnaryPlus($expr);
+                case self::NEGATE:
+                    return new \PhpParser\Node\Expr\UnaryMinus($expr);
+                case self::SUPPRESS:
+                    return new \PhpParser\Node\Expr\ErrorSuppress($expr);
+                case self::EMPTY:
+                    return new \PhpParser\Node\Expr\Empty_($expr);
+                case self::EVAL:
+                    return new \PhpParser\Node\Expr\Eval_($expr);
+                case self::CLONE:
+                    return new \PhpParser\Node\Expr\Clone_($expr);
                 default:
                     throw new \Exception('Invalid unary operator type: ' . $this->type);
             }
