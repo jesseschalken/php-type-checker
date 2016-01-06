@@ -126,6 +126,13 @@ namespace JesseSchalken\PhpTypeChecker\Node {
                 );
             }
 
+            if (count($nodes) == 1) {
+                $node = $nodes[0];
+                if ($node instanceof \PhpParser\Node\Stmt\Namespace_ && !$node->name) {
+                    $nodes = $node->stmts;
+                }
+            }
+
             return $this->shebang . (new \PhpParser\PrettyPrinter\Standard())->prettyPrintFile($nodes);
         }
     }
@@ -141,6 +148,7 @@ namespace JesseSchalken\PhpTypeChecker\Parser {
     use JesseSchalken\PhpTypeChecker\Node\ErrorReceiver;
     use JesseSchalken\PhpTypeChecker\Node\Expr;
     use JesseSchalken\PhpTypeChecker\Node\Stmt;
+    use JesseSchalken\PhpTypeChecker\Node\Type;
     use function JesseSchalken\MagicUtils\clone_ref;
 
     abstract class DefinedNames {
@@ -515,7 +523,7 @@ namespace JesseSchalken\PhpTypeChecker\Parser {
         }
 
         private function resetNamespace(\PhpParser\Node\Name $name = null) {
-            $this->namespace   = $name ?: new \PhpParser\Node\Name('');
+            $this->namespace   = $name ?: new \PhpParser\Node\Name([]);
             $this->useClass    = new ClassUses($this->namespace, $this->globals->classes);
             $this->useFunction = new FunctionUses($this->namespace, $this->globals->classes);
             $this->useConstant = new ConstantUses($this->namespace, $this->globals->classes);
@@ -537,10 +545,6 @@ namespace JesseSchalken\PhpTypeChecker\Parser {
             clone_ref($this->trait);
             clone_ref($this->parent);
             clone_ref($this->function);
-        }
-
-        private function locateNode(\PhpParser\Node $node):CodeLoc {
-            return $this->file->locateNode($node);
         }
 
         /**
@@ -603,8 +607,19 @@ namespace JesseSchalken\PhpTypeChecker\Parser {
             return $stmts;
         }
 
-        private function newUnusedvariable():Expr\Variable {
-            return new Expr\Variable(new Expr\Literal($this->locals->create('_')));
+        /**
+         * @return string
+         */
+        private function newUnusedvariable() {
+            return $this->locals->create('_');
+        }
+
+        private function getFinally() {
+            return new Stmt\Block($this->finallys);
+        }
+
+        private function hasFinally() {
+            return $this->getFinally()->split() ? true : false;
         }
 
         private function parseStmt(\PhpParser\Node $node):Stmt\Stmt {
@@ -629,10 +644,10 @@ namespace JesseSchalken\PhpTypeChecker\Parser {
             } elseif ($node instanceof \PhpParser\Node\Stmt\Return_) {
                 $expr = $this->parseExprNull($node->expr);
 
-                if ($this->finallys) {
+                if ($this->hasFinally()) {
                     $stmts = [];
                     if ($expr) {
-                        $var     = $this->newUnusedvariable();
+                        $var     = new Expr\Variable(new Expr\Literal($this->newUnusedvariable()));
                         $stmts[] = new Expr\BinOp($var, $this->returnRef ? Expr\BinOp::ASSIGN_REF : Expr\BinOp::ASSIGN, $expr);
                         $expr    = $var;
                     }
@@ -667,7 +682,11 @@ namespace JesseSchalken\PhpTypeChecker\Parser {
                 $self->resetMagicConstants();
                 $self->class = $name;
 
-                return new Stmt\Interface_($name, $self->parseClassMembers($node));
+                $extends = [];
+                foreach ($node->extends as $extend) {
+                    $extends[] = $self->resolveClass($extend)->toString();
+                }
+                return new Stmt\Interface_($name, $extends, $self->parseClassMembers($node));
             } elseif ($node instanceof \PhpParser\Node\Stmt\Trait_) {
                 $name = $this->prefixName($node->name);
                 $self = clone $this;
@@ -767,8 +786,8 @@ namespace JesseSchalken\PhpTypeChecker\Parser {
             } elseif ($node instanceof \PhpParser\Node\Stmt\TryCatch) {
                 if ($node->finallyStmts) {
                     $finally      = $this->parseStmts($node->finallyStmts);
-                    $finallyVar   = $this->newUnusedvariable();
-                    $exceptionVar = $this->newUnusedvariable();
+                    $finallyVar   = new Expr\Variable(new Expr\Literal($this->newUnusedvariable()));
+                    $exceptionVar = new Expr\Variable(new Expr\Literal($excVar = $this->newUnusedvariable()));
 
                     $self = clone $this;
                     $self->finallys[0]->add(new Stmt\Block([
@@ -779,7 +798,7 @@ namespace JesseSchalken\PhpTypeChecker\Parser {
                     return new Stmt\Block([
                         new Expr\BinOp($finallyVar, Expr\BinOp::ASSIGN, new Expr\Literal(false)),
                         new Stmt\Try_($self->parseTryCatch($node), [
-                            new Stmt\Catch_('Exception', $exceptionVar, new Stmt\Block()),
+                            new Stmt\Catch_('Exception', $excVar, new Stmt\Block()),
                         ]),
                         new Stmt\If_(
                             new Expr\UnOp(Expr\UnOp::BOOL_NOT, $finallyVar),
@@ -825,15 +844,63 @@ namespace JesseSchalken\PhpTypeChecker\Parser {
 
         /**
          * @param \PhpParser\Node\Stmt\ClassLike $node
-         * @return Stmt\ClassMember[]
+         * @return Stmt\AbstractClassMember[]
+         * @throws \Exception
          */
         private function parseClassMembers(\PhpParser\Node\Stmt\ClassLike $node) {
+            $stmts = [];
             foreach ($node->stmts as $stmt) {
-                if ($stmt instanceof \PhpParser\Node\Stmt\ClassMethod && $stmt->stmts) {
-                    $this->parseStmts($stmt->stmts);
+                if ($stmt instanceof \PhpParser\Node\Stmt\ClassMethod) {
+                    $stmts[] = new Stmt\Method_(
+                        $stmt->name,
+                        $this->parseFunctionType($stmt),
+                        $stmt->stmts === null ? null : $this->parseStmts($stmt->stmts),
+                        !!($stmt->type & \PhpParser\Node\Stmt\Class_::MODIFIER_FINAL),
+                        $this->parseVisibility($stmt->type),
+                        !!($stmt->type & \PhpParser\Node\Stmt\Class_::MODIFIER_STATIC)
+                    );
+                } else if ($stmt instanceof \PhpParser\Node\Stmt\ClassConst) {
+                    foreach ($stmt->consts as $const) {
+                        $stmts[] = new Stmt\ClassConstant(
+                            $const->name,
+                            $this->parseExpr($const->value)
+                        );
+                    }
+                } else if ($stmt instanceof \PhpParser\Node\Stmt\Property) {
+                    $visibility = $this->parseVisibility($stmt->type);
+                    $static     = $stmt->type & \PhpParser\Node\Stmt\Class_::MODIFIER_STATIC;
+                    foreach ($stmt->props as $prop) {
+                        $stmts[] = new Stmt\Property(
+                            $prop->name,
+                            // TODO extract type from doc comment
+                            new Type\Mixed(),
+                            $this->parseExprNull($prop->default),
+                            $visibility,
+                            $static
+                        );
+                    }
+                } else if ($stmt instanceof \PhpParser\Node\Stmt\TraitUse) {
+                } else {
+                    throw new \Exception('Unhandled class member type: ' . get_class($stmt));
                 }
             }
-            return [];
+            return $stmts;
+        }
+
+        /**
+         * @param int $type
+         * @return string
+         */
+        private function parseVisibility($type) {
+            if ($type & \PhpParser\Node\Stmt\Class_::MODIFIER_PUBLIC) {
+                return Stmt\Visibility::PUBLIC;
+            } else if ($type & \PhpParser\Node\Stmt\Class_::MODIFIER_PROTECTED) {
+                return Stmt\Visibility::PROTECTED;
+            } else if ($type & \PhpParser\Node\Stmt\Class_::MODIFIER_PRIVATE) {
+                return Stmt\Visibility::PRIVATE;
+            } else {
+                return Stmt\Visibility::PUBLIC;
+            }
         }
 
         /**
@@ -841,7 +908,63 @@ namespace JesseSchalken\PhpTypeChecker\Parser {
          * @return Stmt\FunctionSignature
          */
         private function parseFunctionType(\PhpParser\Node\FunctionLike $node) {
-            return new Stmt\FunctionSignature(false, []);
+            // TODO extract types from doc comment
+            // TODO and make sure they're compatible with any real type hints
+            $params = [];
+            foreach ($node->getParams() as $param) {
+                $params[] = new Stmt\FunctionParam(
+                    $param->name,
+                    $this->parseExprNull($param->default),
+                    $param->byRef,
+                    $param->variadic,
+                    $this->parseType($param->type)
+                );
+            }
+            return new Stmt\FunctionSignature(
+                $node->returnsByRef(),
+                $params,
+                $this->parseType($node->getReturnType())
+            );
+        }
+
+        /**
+         * @param null|string|\PhpParser\Node\Name $type
+         * @return Type\Type
+         * @throws \Exception
+         */
+        private function parseType($type):Type\Type {
+            if ($type === null) {
+                return new Type\Mixed;
+            } else if (is_string($type)) {
+                switch ($type) {
+                    case 'int':
+                    case 'integer':
+                        return new Type\SimpleType(Type\SimpleType::INT);
+                    case 'string':
+                        return new Type\SimpleType(Type\SimpleType::STRING);
+                    case 'double':
+                    case 'float':
+                        return new Type\SimpleType(Type\SimpleType::FLOAT);
+                    case 'bool':
+                    case 'boolean':
+                        return new Type\SimpleType(Type\SimpleType::BOOL);
+                    case 'null':
+                    case 'void':
+                        return new Type\SimpleType(Type\SimpleType::NULL);
+                    case 'object':
+                        return new Type\SimpleType(Type\SimpleType::OBJECT);
+                    case 'resource':
+                        return new Type\SimpleType(Type\SimpleType::RESOURCE);
+                    case 'array':
+                        return new Type\SimpleType(Type\SimpleType::ARRAY);
+                    default:
+                        throw new \Exception('Invalid simple type: ' . $type);
+                }
+            } else if ($type instanceof \PhpParser\Node\Name) {
+                return new Type\ObjectType($this->resolveClass($type)->toString());
+            } else {
+                throw new \Exception('huh?');
+            }
         }
 
         /**
@@ -1349,7 +1472,9 @@ namespace JesseSchalken\PhpTypeChecker\Parser {
                 $name,
                 $self->parseClassMembers($node),
                 $parent,
-                $implements
+                $implements,
+                $node->type & \PhpParser\Node\Stmt\Class_::MODIFIER_ABSTRACT ? true : false,
+                $node->type & \PhpParser\Node\Stmt\Class_::MODIFIER_FINAL ? true : false
             );
         }
     }
@@ -1568,8 +1693,12 @@ namespace JesseSchalken\PhpTypeChecker\Node\Stmt {
             return $this->name;
         }
 
+        public function basename() {
+            return remove_namespace($this->name);
+        }
+
         /**
-         * @return ClassMember[]
+         * @return AbstractClassMember[]
          */
         public abstract function members();
 
@@ -1591,7 +1720,7 @@ namespace JesseSchalken\PhpTypeChecker\Node\Stmt {
          * @return \PhpParser\Node[]
          */
         public function unparseMembers():array {
-            $nodes = array();
+            $nodes = [];
             foreach ($this->members() as $member) {
                 $nodes[] = $member->unparse();
             }
@@ -1617,7 +1746,10 @@ namespace JesseSchalken\PhpTypeChecker\Node\Stmt {
         }
 
         public function unparse():array {
-            return [];
+            return [new \PhpParser\Node\Stmt\Trait_(
+                $this->basename(),
+                $this->unparseMembers()
+            )];
         }
     }
 
@@ -1628,18 +1760,33 @@ namespace JesseSchalken\PhpTypeChecker\Node\Stmt {
         private $parent;
         /** @var string[] */
         private $implements;
+        /** @var bool */
+        private $abstract;
+        /** @var bool */
+        private $final;
 
         /**
          * @param string        $name
          * @param ClassMember[] $members
          * @param string|null   $parent
          * @param string[]      $implements
+         * @param bool          $abstract
+         * @param bool          $final
          */
-        public function __construct($name, array $members, $parent = null, array $implements = []) {
+        public function __construct(
+            $name,
+            array $members,
+            $parent = null,
+            array $implements = [],
+            $abstract,
+            $final
+        ) {
             parent::__construct($name);
             $this->members    = $members;
             $this->parent     = $parent;
             $this->implements = $implements;
+            $this->abstract   = $abstract;
+            $this->final      = $final;
         }
 
         public function makeAnonymous():Expr\Expr {
@@ -1658,8 +1805,25 @@ namespace JesseSchalken\PhpTypeChecker\Node\Stmt {
         }
 
         public function unparse():array {
+            $type = 0;
+            if ($this->abstract) {
+                $type |= \PhpParser\Node\Stmt\Class_::MODIFIER_ABSTRACT;
+            }
+            if ($this->final) {
+                $type |= \PhpParser\Node\Stmt\Class_::MODIFIER_FINAL;
+            }
+            $implements = [];
+            foreach ($this->implements as $interface) {
+                $implements[] = new \PhpParser\Node\Name\FullyQualified($interface);
+            }
             return [new \PhpParser\Node\Stmt\Class_(
-                $this->name()
+                $this->basename(),
+                [
+                    'type'       => $type,
+                    'extends'    => $this->parent ? new \PhpParser\Node\Name\FullyQualified($this->parent) : null,
+                    'implements' => $implements,
+                    'stmts'      => $this->unparseMembers(),
+                ]
             )];
         }
     }
@@ -1667,14 +1831,18 @@ namespace JesseSchalken\PhpTypeChecker\Node\Stmt {
     class Interface_ extends Classish {
         /** @var Method_[] */
         private $methods = [];
+        /** @var string[] */
+        private $extends = [];
 
         /**
          * @param string    $name
+         * @param string[]  $extends
          * @param Method_[] $methods
          */
-        public function __construct($name, array $methods) {
+        public function __construct($name, $extends, array $methods) {
             parent::__construct($name);
             $this->methods = $methods;
+            $this->extends = $extends;
         }
 
         public function members() {
@@ -1682,19 +1850,36 @@ namespace JesseSchalken\PhpTypeChecker\Node\Stmt {
         }
 
         public function unparse():array {
+            $extends = [];
+            foreach ($this->extends as $extend) {
+                $extends[] = new \PhpParser\Node\Name\FullyQualified($extend);
+            }
             return [new \PhpParser\Node\Stmt\Interface_(
-                $this->name()
+                $this->basename(),
+                [
+                    'stmts'   => $this->unparseMembers(),
+                    'extends' => $extends,
+                ]
             )];
         }
     }
 
+    /**
+     * @param string $name
+     * @return string
+     */
     function extract_namespace($name) {
         $pos = strrpos($name, '\\');
-        if ($pos === false) {
-            return '';
-        } else {
-            return substr($name, 0, $pos);
-        }
+        return $pos === false ? '' : substr($name, 0, $pos);
+    }
+
+    /**
+     * @param string $name
+     * @return string
+     */
+    function remove_namespace($name) {
+        $pos = strrpos($name, '\\');
+        return $pos === false ? $name : substr($name, $pos + 1);
     }
 
     class Function_ extends SingleStmt {
@@ -1730,7 +1915,7 @@ namespace JesseSchalken\PhpTypeChecker\Node\Stmt {
 
         public function unparse():array {
             return [new \PhpParser\Node\Stmt\Function_(
-                $this->name,
+                remove_namespace($this->name),
                 array_replace($this->type->unparseAttributes(), [
                     'stmts' => $this->body->unparse(),
                 ])
@@ -1738,7 +1923,52 @@ namespace JesseSchalken\PhpTypeChecker\Node\Stmt {
         }
     }
 
-    abstract class ClassMember extends Node {
+    abstract class AbstractClassMember extends Node {
+        public abstract function unparse():\PhpParser\Node;
+
+        /**
+         * @return Stmt[]
+         */
+        public abstract function subStmts():array;
+    }
+
+    class ClassConstant extends AbstractClassMember {
+        /** @var string */
+        private $name;
+        /** @var Expr\Expr */
+        private $value;
+
+        /**
+         * @param string    $name
+         * @param Expr\Expr $value
+         */
+        public function __construct($name, Expr\Expr $value) {
+            $this->name  = $name;
+            $this->value = $value;
+        }
+
+        public function unparse():\PhpParser\Node {
+            return new \PhpParser\Node\Stmt\ClassConst([
+                new \PhpParser\Node\Const_(
+                    $this->name,
+                    $this->value->unparse_()
+                ),
+            ]);
+        }
+
+        public function subStmts():array {
+            if ($this->value) {
+                return [$this->value];
+            } else {
+                return [];
+            }
+        }
+    }
+
+    abstract class UseTrait extends AbstractClassMember {
+    }
+
+    abstract class ClassMember extends AbstractClassMember {
         /** @var string */
         private $visibility;
         /** @var bool */
@@ -1756,12 +1986,6 @@ namespace JesseSchalken\PhpTypeChecker\Node\Stmt {
         public function visibility() {
             return $this->visibility;
         }
-
-        public function subStmts() {
-            return [];
-        }
-
-        public abstract function unparse():\PhpParser\Node;
 
         public final function modifiers() {
             $type = 0;
@@ -1807,7 +2031,7 @@ namespace JesseSchalken\PhpTypeChecker\Node\Stmt {
             $this->default = $default;
         }
 
-        public function subStmts() {
+        public function subStmts():array {
             return $this->default ? $this->default->subStmts() : [];
         }
 
@@ -1833,10 +2057,12 @@ namespace JesseSchalken\PhpTypeChecker\Node\Stmt {
         /**
          * @param bool            $returnRef
          * @param FunctionParam[] $params
+         * @param Type\Type       $returnType
          */
-        public function __construct($returnRef, array $params) {
-            $this->returnRef = $returnRef;
-            $this->params    = $params;
+        public function __construct($returnRef, array $params, Type\Type $returnType) {
+            $this->returnRef  = $returnRef;
+            $this->params     = $params;
+            $this->returnType = $returnType;
         }
 
         public function subStmts() {
@@ -1857,7 +2083,7 @@ namespace JesseSchalken\PhpTypeChecker\Node\Stmt {
             return [
                 'byRef'      => $this->returnRef,
                 'params'     => $params,
-                'returnType' => $this->returnType ? $this->returnType->unparse() : null,
+                'returnType' => $this->returnType->unparse(),
             ];
         }
     }
@@ -1896,7 +2122,7 @@ namespace JesseSchalken\PhpTypeChecker\Node\Stmt {
             return $this->final ? true : false;
         }
 
-        public function subStmts() {
+        public function subStmts():array {
             $stmts = $this->type->subStmts();
             if ($this->body) {
                 $stmts[] = $this->body;
@@ -1905,6 +2131,12 @@ namespace JesseSchalken\PhpTypeChecker\Node\Stmt {
         }
 
         public function unparse():\PhpParser\Node {
+            $params = $this->type->unparseAttributes();
+            $params = array_replace($params, [
+                'type'  => $this->modifiers(),
+                'stmts' => $this->body ? $this->body->unparse() : null,
+            ]);
+            return new \PhpParser\Node\Stmt\ClassMethod($this->name, $params);
         }
     }
 
@@ -1925,12 +2157,14 @@ namespace JesseSchalken\PhpTypeChecker\Node\Stmt {
          * @param Expr\Expr|null $default
          * @param bool           $passByRef
          * @param bool           $variadic
+         * @param Type\Type      $type
          */
-        public function __construct($name, Expr\Expr $default = null, $passByRef, $variadic) {
+        public function __construct($name, Expr\Expr $default = null, $passByRef, $variadic, Type\Type $type) {
             $this->name      = $name;
             $this->default   = $default;
             $this->passByRef = $passByRef;
             $this->variadic  = $variadic;
+            $this->type      = $type;
         }
 
         public function subStmts() {
@@ -2050,7 +2284,7 @@ namespace JesseSchalken\PhpTypeChecker\Node\Stmt {
         public function unparse():array {
             return [new \PhpParser\Node\Stmt\Const_([
                 new \PhpParser\Node\Const_(
-                    $this->name,
+                    remove_namespace($this->name),
                     $this->value->unparse_()
                 ),
             ])];
@@ -2362,7 +2596,7 @@ namespace JesseSchalken\PhpTypeChecker\Node\Stmt {
             return !$cathes ? $body : [new \PhpParser\Node\Stmt\TryCatch(
                 $body,
                 $cathes,
-                []
+                null
             )];
         }
     }
@@ -2857,6 +3091,14 @@ namespace JesseSchalken\PhpTypeChecker\Node\Expr {
                 return $value;
             } else {
                 return parent::unparseOrString();
+            }
+        }
+
+        public function unparseOrName() {
+            if (is_string($this->value)) {
+                return new \PhpParser\Node\Name\FullyQualified($this->value);
+            } else {
+                return parent::unparseOrName();
             }
         }
     }
@@ -3356,7 +3598,7 @@ namespace JesseSchalken\PhpTypeChecker\Node\Expr {
 
         public function unparse_():\PhpParser\Node\Expr {
             switch ($this->type) {
-                case self::INSTANCEOF:
+                case self:: INSTANCEOF:
                     return new \PhpParser\Node\Expr\Instanceof_(
                         $this->left->unparse_(),
                         $this->right->unparseOrName()
@@ -3630,8 +3872,12 @@ namespace JesseSchalken\PhpTypeChecker\Node\Expr {
 
         /**
          * @param string $class
+         * @throws \Exception
          */
         public function __construct($class) {
+            if (substr($class, 0, 1) === '\\') {
+                throw new \Exception("Illegal class name: $class");
+            }
             $this->class = $class;
         }
 
@@ -3689,12 +3935,76 @@ namespace JesseSchalken\PhpTypeChecker\Node\Type {
 
     use JesseSchalken\PhpTypeChecker\Node\Node;
 
-    class Type extends Node {
+    abstract class Type extends Node {
         /**
          * @return null|string|\PhpParser\Node\Name
          */
+        public abstract function unparse();
+    }
+
+    class Mixed extends Type {
         public function unparse() {
             return null;
+        }
+    }
+
+    class SimpleType extends Type {
+        const INT      = 'int';
+        const STRING   = 'string';
+        const FLOAT    = 'float';
+        const NULL     = 'null';
+        const OBJECT   = 'object';
+        const ARRAY    = 'array';
+        const RESOURCE = 'resource';
+        const BOOL     = 'bool';
+
+        /** @var string */
+        private $type;
+
+        /**
+         * @param string $type
+         */
+        public function __construct($type) {
+            $this->type = $type;
+        }
+
+        public function unparse() {
+            switch ($this->type) {
+                case self::ARRAY:
+                    return 'array';
+                case self::BOOL:
+                    return 'bool';
+                case self::FLOAT:
+                    return 'float';
+                case self::INT:
+                    return 'int';
+                case self::STRING:
+                    return 'string';
+                default:
+                    return null;
+            }
+        }
+    }
+
+    class Callable_ extends Type {
+        public function unparse() {
+            return 'callable';
+        }
+    }
+
+    class ObjectType extends Type {
+        /** @var string */
+        private $class;
+
+        /**
+         * @param string $class
+         */
+        public function __construct($class) {
+            $this->class = $class;
+        }
+
+        public function unparse() {
+            return new \PhpParser\Node\Name\FullyQualified($this->class);
         }
     }
 }
