@@ -1586,6 +1586,17 @@ namespace JesseSchalken\PhpTypeChecker\Node\Stmt {
         public function namespaces():array {
             return array_merge(parent::namespaces(), [extract_namespace($this->name)]);
         }
+
+        /**
+         * @return \PhpParser\Node[]
+         */
+        public function unparseMembers():array {
+            $nodes = array();
+            foreach ($this->members() as $member) {
+                $nodes[] = $member->unparse();
+            }
+            return $nodes;
+        }
     }
 
     class Trait_ extends Classish {
@@ -1749,6 +1760,29 @@ namespace JesseSchalken\PhpTypeChecker\Node\Stmt {
         public function subStmts() {
             return [];
         }
+
+        public abstract function unparse():\PhpParser\Node;
+
+        public final function modifiers() {
+            $type = 0;
+            switch ($this->visibility) {
+                case 'public':
+                    $type |= \PhpParser\Node\Stmt\Class_::MODIFIER_PUBLIC;
+                    break;
+                case 'private';
+                    $type |= \PhpParser\Node\Stmt\Class_::MODIFIER_PRIVATE;
+                    break;
+                case 'protected';
+                    $type |= \PhpParser\Node\Stmt\Class_::MODIFIER_PROTECTED;
+                    break;
+            }
+
+            if ($this->static) {
+                $type |= \PhpParser\Node\Stmt\Class_::MODIFIER_STATIC;
+            }
+
+            return $type;
+        }
     }
 
     class Property extends ClassMember {
@@ -1775,6 +1809,16 @@ namespace JesseSchalken\PhpTypeChecker\Node\Stmt {
 
         public function subStmts() {
             return $this->default ? $this->default->subStmts() : [];
+        }
+
+        public function unparse():\PhpParser\Node {
+            return new \PhpParser\Node\Stmt\Property(
+                $this->modifiers(),
+                [new \PhpParser\Node\Stmt\PropertyProperty(
+                    $this->name,
+                    $this->default ? $this->default->unparse_() : null
+                )]
+            );
         }
     }
 
@@ -1858,6 +1902,9 @@ namespace JesseSchalken\PhpTypeChecker\Node\Stmt {
                 $stmts[] = $this->body;
             }
             return $stmts;
+        }
+
+        public function unparse():\PhpParser\Node {
         }
     }
 
