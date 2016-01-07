@@ -4129,11 +4129,20 @@ namespace JesseSchalken\PhpTypeChecker\Node\Type {
          * @return null|string|\PhpParser\Node\Name
          */
         public abstract function unparse();
+
+        /**
+         * @return string
+         */
+        public abstract function toString();
     }
 
     class Mixed extends Type {
         public function unparse() {
             return null;
+        }
+
+        public function toString() {
+            return 'mixed';
         }
     }
 
@@ -4173,10 +4182,18 @@ namespace JesseSchalken\PhpTypeChecker\Node\Type {
                     return null;
             }
         }
+
+        public function toString() {
+            return $this->type;
+        }
     }
 
     class Callable_ extends Type {
         public function unparse() {
+            return 'callable';
+        }
+
+        public function toString() {
             return 'callable';
         }
     }
@@ -4194,6 +4211,10 @@ namespace JesseSchalken\PhpTypeChecker\Node\Type {
 
         public function unparse() {
             return new \PhpParser\Node\Name\FullyQualified($this->class);
+        }
+
+        public function toString() {
+            return $this->class;
         }
     }
 }
