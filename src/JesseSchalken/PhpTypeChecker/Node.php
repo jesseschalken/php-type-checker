@@ -215,7 +215,7 @@ namespace JesseSchalken\PhpTypeChecker\Parser {
         }
 
         public function getMap():array {
-            $map = array();
+            $map = [];
             foreach ($this->uses as $k => $use) {
                 $map[$k] = $use->toString();
             }
@@ -894,7 +894,7 @@ namespace JesseSchalken\PhpTypeChecker\Parser {
                         }
                         $stmts[] = new Stmt\Property(
                             $prop->name,
-                            $type ?: new Type\Mixed(),
+                            $type ?: new Type\SimpleType(Type\SimpleType::MIXED),
                             $this->parseExprNull($prop->default),
                             $visibility,
                             $static
@@ -1011,9 +1011,9 @@ namespace JesseSchalken\PhpTypeChecker\Parser {
             } else if ($type instanceof \phpDocumentor\Reflection\Types\Resource) {
                 return new Type\SimpleType(Type\SimpleType::RESOURCE);
             } else if ($type instanceof \phpDocumentor\Reflection\Types\Mixed) {
-                return new Type\Mixed();
+                return new Type\SimpleType(Type\SimpleType::MIXED);
             } else if ($type instanceof \phpDocumentor\Reflection\Types\Scalar) {
-                return new Type\Scalar();
+                return new Type\SimpleType(Type\SimpleType::SCALAR);
             } else if ($type instanceof \phpDocumentor\Reflection\Types\This) {
                 return new Type\This();
             } else if ($type instanceof \phpDocumentor\Reflection\Types\Boolean) {
@@ -1073,9 +1073,9 @@ namespace JesseSchalken\PhpTypeChecker\Parser {
          */
         private function parseType($type):Type\Type {
             if ($type === null) {
-                return new Type\Mixed;
+                return new Type\SimpleType(Type\SimpleType::MIXED);
             } else if (is_string($type)) {
-                switch ($type) {
+                switch (strtolower($type)) {
                     case 'int':
                     case 'integer':
                         return new Type\SimpleType(Type\SimpleType::INT);
@@ -1096,6 +1096,8 @@ namespace JesseSchalken\PhpTypeChecker\Parser {
                         return new Type\SimpleType(Type\SimpleType::RESOURCE);
                     case 'array':
                         return new Type\SimpleType(Type\SimpleType::ARRAY);
+                    case 'callable':
+                        return new Type\Callable_();
                     default:
                         throw new \Exception('Invalid simple type: ' . $type);
                 }
@@ -4253,99 +4255,51 @@ namespace JesseSchalken\PhpTypeChecker\Node\Type {
          */
         public function triviallyContains(Type $type) {
             // We entirely contain these simple types
-            $inner = $this->getInnerSimpleTypes();
+            $contained = $this->getContainedSimpleTypes();
 
             // The given type is entirely contained by these simple types
-            $possible = $type->getOuterSimpleTypes();
+            $possible = $type->getContainingSimpleTypes();
 
-            // If there are no simple types which the given type may be
-            // which we do not entirely contain, then we necessarily contain it.
-            return array_diff($possible, $inner) ? false : true;
+            // If there are any simple types which the given type may be
+            // which we do not entirely contain, then we do not necessarily contain it.
+            return $possible & ~$contained ? false : true;
         }
 
         /**
          * The simple types which together entirely contain this type.
-         * Should be the same as getInnerSimpleTypes(), possibly with extra things.
-         * @return string[]
+         * Should contain getInnerSimpleTypes(), with other types possibly added.
+         * @return int
          */
-        public function getOuterSimpleTypes():array {
-            return $this->getInnerSimpleTypes();
+        public function getContainingSimpleTypes() {
+            return $this->getContainedSimpleTypes();
         }
 
         /**
          * The simple types which are entirely contained by this type.
-         * @return string[]
+         * @return int
          */
-        public function getInnerSimpleTypes():array {
-            return [];
-        }
-    }
-
-    class Mixed extends Type {
-        public function toTypeHint() {
-            return null;
-        }
-
-        public function toString($atomic = false) {
-            return 'mixed';
-        }
-
-        public function triviallyContains(Type $type) {
-            // The parent implementation would have been fine, but this is faster
-            return true;
-        }
-
-        public function getInnerSimpleTypes():array {
-            return [
-                SimpleType::BOOL,
-                SimpleType::INT,
-                SimpleType::STRING,
-                SimpleType::FLOAT,
-                SimpleType::NULL,
-                SimpleType::OBJECT,
-                SimpleType::RESOURCE,
-                SimpleType::ARRAY,
-            ];
-        }
-    }
-
-    /**
-     * string|int|float|bool
-     */
-    class Scalar extends Type {
-        public function toTypeHint() {
-            return null;
-        }
-
-        public function toString($atomic = false) {
-            return 'scalar';
-        }
-
-        public function getInnerSimpleTypes():array {
-            return [
-                SimpleType::STRING,
-                SimpleType::INT,
-                SimpleType::FLOAT,
-                SimpleType::BOOL,
-            ];
+        public function getContainedSimpleTypes() {
+            return 0;
         }
     }
 
     class SimpleType extends Type {
-        const INT      = 'int';
-        const STRING   = 'string';
-        const FLOAT    = 'float';
-        const NULL     = 'null';
-        const OBJECT   = 'object';
-        const ARRAY    = 'array';
-        const RESOURCE = 'resource';
-        const BOOL     = 'bool';
+        const INT      = 1 << 0;
+        const STRING   = 1 << 1;
+        const FLOAT    = 1 << 2;
+        const NULL     = 1 << 3;
+        const OBJECT   = 1 << 4;
+        const ARRAY    = 1 << 5;
+        const RESOURCE = 1 << 6;
+        const BOOL     = 1 << 7;
+        const SCALAR   = self::INT | self::STRING | self::FLOAT | self::BOOL;
+        const MIXED    = self::SCALAR | self::NULL | self::RESOURCE | self::ARRAY | self::OBJECT;
 
-        /** @var string */
+        /** @var int */
         private $type;
 
         /**
-         * @param string $type
+         * @param int $type
          */
         public function __construct($type) {
             $this->type = $type;
@@ -4373,11 +4327,43 @@ namespace JesseSchalken\PhpTypeChecker\Node\Type {
         }
 
         public function toString($atomic = false) {
-            return $this->type;
+            $int   = $this->type;
+            $types = [];
+
+            foreach ([
+                [self::MIXED, 'mixed'],
+                [self::SCALAR, 'scalar'],
+                [self::INT, 'int'],
+                [self::STRING, 'string'],
+                [self::ARRAY, 'array'],
+                [self::BOOL, 'bool'],
+                [self::NULL, 'null'],
+                [self::FLOAT, 'float'],
+                [self::OBJECT, 'object'],
+                [self::RESOURCE, 'resource'],
+            ] as list($i, $s)) {
+                if (!$int) {
+                    break;
+                }
+                if (($i & $int) == $i) {
+                    $int &= ~$i;
+                    $types[] = $s;
+                }
+            }
+
+            switch (count($types)) {
+                case 0:
+                    return '()';
+                case 1:
+                    return $types[0];
+                default:
+                    $s = join('|', $types);
+                    return $atomic ? "($s)" : $s;
+            }
         }
 
-        public function getInnerSimpleTypes():array {
-            return [$this->type];
+        public function getContainedSimpleTypes() {
+            return $this->type;
         }
     }
 
@@ -4397,18 +4383,12 @@ namespace JesseSchalken\PhpTypeChecker\Node\Type {
             return 'callable';
         }
 
-        public function getOuterSimpleTypes():array {
+        public function getContainingSimpleTypes() {
             // A callable could be any of these simple types
-            return [
-                SimpleType::OBJECT,
-                SimpleType::STRING,
-                SimpleType::ARRAY,
-            ];
-        }
-
-        public function getInnerSimpleTypes():array {
-            // There are no simple types which are necessarily callable
-            return [];
+            return
+                SimpleType::OBJECT |
+                SimpleType::STRING |
+                SimpleType::ARRAY;
         }
 
         public function triviallyContains(Type $type) {
@@ -4435,8 +4415,8 @@ namespace JesseSchalken\PhpTypeChecker\Node\Type {
             return $this->class;
         }
 
-        public function getOuterSimpleTypes():array {
-            return [SimpleType::OBJECT];
+        public function getContainingSimpleTypes() {
+            return SimpleType::OBJECT;
         }
     }
 
@@ -4449,14 +4429,9 @@ namespace JesseSchalken\PhpTypeChecker\Node\Type {
             return 'static';
         }
 
-        public function getOuterSimpleTypes():array {
+        public function getContainingSimpleTypes():array {
             // A "static" can only be an object
-            return [SimpleType::OBJECT];
-        }
-
-        public function getInnerSimpleTypes():array {
-            // No simple type is necessarily a static
-            return [];
+            return SimpleType::OBJECT;
         }
     }
 
@@ -4469,14 +4444,9 @@ namespace JesseSchalken\PhpTypeChecker\Node\Type {
             return '$this';
         }
 
-        public function getOuterSimpleTypes():array {
+        public function getContainingSimpleTypes() {
             // A $this is necessarily an object
-            return [SimpleType::OBJECT];
-        }
-
-        public function getInnerSimpleTypes():array {
-            // No simple type is necessarily a $this
-            return [];
+            return SimpleType::OBJECT;
         }
     }
 
@@ -4508,7 +4478,7 @@ namespace JesseSchalken\PhpTypeChecker\Node\Type {
                 default:
                     $types = [];
                     foreach ($this->types as $type) {
-                        $types[] = $type->toString(true);
+                        $types[] = $type->toString(false);
                     }
                     $string = join('|', $types);
                     return $atomic ? "($string)" : $string;
@@ -4527,22 +4497,18 @@ namespace JesseSchalken\PhpTypeChecker\Node\Type {
             return false;
         }
 
-        public function getInnerSimpleTypes():array {
-            $inners = [];
+        public function getContainedSimpleTypes() {
+            $inners = 0;
             foreach ($this->types as $type) {
-                foreach ($type->getInnerSimpleTypes() as $inner) {
-                    $inners[] = $inner;
-                }
+                $inners |= $type->getContainedSimpleTypes();
             }
             return $inners;
         }
 
-        public function getOuterSimpleTypes():array {
-            $outers = [];
+        public function getContainingSimpleTypes() {
+            $outers = 0;
             foreach ($this->types as $type) {
-                foreach ($type->getOuterSimpleTypes() as $outer) {
-                    $outers[] = $outer;
-                }
+                $outers |= $type->getContainingSimpleTypes();
             }
             return $outers;
         }
@@ -4564,14 +4530,9 @@ namespace JesseSchalken\PhpTypeChecker\Node\Type {
             return $this->inner->toString(true) . '[]';
         }
 
-        public function getOuterSimpleTypes():array {
+        public function getContainingSimpleTypes() {
             // A T[] is necessarily an array
-            return [SimpleType::ARRAY];
-        }
-
-        public function getInnerSimpleTypes():array {
-            // No simple type is necessarily a T[]
-            return [];
+            return SimpleType::ARRAY;
         }
 
         public function triviallyContains(Type $type) {
