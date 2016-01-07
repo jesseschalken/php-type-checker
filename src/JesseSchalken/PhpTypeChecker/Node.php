@@ -525,8 +525,8 @@ namespace JesseSchalken\PhpTypeChecker\Parser {
         private function resetNamespace(\PhpParser\Node\Name $name = null) {
             $this->namespace   = $name ?: new \PhpParser\Node\Name([]);
             $this->useClass    = new ClassUses($this->namespace, $this->globals->classes);
-            $this->useFunction = new FunctionUses($this->namespace, $this->globals->classes);
-            $this->useConstant = new ConstantUses($this->namespace, $this->globals->classes);
+            $this->useFunction = new FunctionUses($this->namespace, $this->globals->functions);
+            $this->useConstant = new ConstantUses($this->namespace, $this->globals->constants);
         }
 
         private function resetMagicConstants() {
@@ -880,6 +880,34 @@ namespace JesseSchalken\PhpTypeChecker\Parser {
                         );
                     }
                 } else if ($stmt instanceof \PhpParser\Node\Stmt\TraitUse) {
+                    $traits = [];
+                    foreach ($stmt->traits as $trait) {
+                        $traits[] = $this->resolveClass($trait)->toString();
+                    }
+                    $useTrait = new Stmt\UseTrait($traits);
+                    foreach ($stmt->adaptations as $adaption) {
+                        if ($adaption instanceof \PhpParser\Node\Stmt\TraitUseAdaptation\Precedence) {
+                            $insteadOf = [];
+                            foreach ($adaption->insteadof as $name) {
+                                $insteadOf[] = $this->resolveClass($name)->toString();
+                            }
+                            $useTrait->addInsteadOf(new Stmt\UseTraitInsteadof(
+                                $this->resolveClass($adaption->trait)->toString(),
+                                $adaption->method,
+                                $insteadOf
+                            ));
+                        } elseif ($adaption instanceof \PhpParser\Node\Stmt\TraitUseAdaptation\Alias) {
+                            $useTrait->addAlias(new Stmt\UseTraitAlias(
+                                $adaption->newName !== null ? $adaption->newName : $adaption->method,
+                                $adaption->method,
+                                $adaption->trait ? $this->resolveClass($adaption->trait)->toString() : null,
+                                $adaption->newModifier !== null ? $this->parseVisibility($adaption->newModifier) : null
+                            ));
+                        } else {
+                            throw new \Exception('Unhandled type of trait adaption: ' . get_class($adaption));
+                        }
+                    }
+                    $stmts[] = $useTrait;
                 } else {
                     throw new \Exception('Unhandled class member type: ' . get_class($stmt));
                 }
@@ -1654,6 +1682,24 @@ namespace JesseSchalken\PhpTypeChecker\Node\Stmt {
     }
 
     class Visibility {
+        /**
+         * @param string $visibility
+         * @return int
+         * @throws \Exception
+         */
+        static function unparse($visibility) {
+            switch ($visibility) {
+                case self::PUBLIC:
+                    return \PhpParser\Node\Stmt\Class_::MODIFIER_PUBLIC;
+                case self::PROTECTED:
+                    return \PhpParser\Node\Stmt\Class_::MODIFIER_PROTECTED;
+                case self::PRIVATE:
+                    return \PhpParser\Node\Stmt\Class_::MODIFIER_PRIVATE;
+                default:
+                    throw new \Exception('Invalid visibility: ' . $visibility);
+            }
+        }
+
         const PUBLIC    = 'public';
         const PROTECTED = 'protected';
         const PRIVATE   = 'private';
@@ -1965,7 +2011,150 @@ namespace JesseSchalken\PhpTypeChecker\Node\Stmt {
         }
     }
 
-    abstract class UseTrait extends AbstractClassMember {
+    class UseTrait extends AbstractClassMember {
+        /** @var string[] */
+        private $traits = [];
+        /** @var UseTraitInsteadof[] */
+        private $insteadOfs = [];
+        /** @var UseTraitAlias[] */
+        private $aliases = [];
+
+        /**
+         * @param string[] $traits
+         */
+        public function __construct(array $traits) {
+            $this->traits = $traits;
+        }
+
+        public function addInsteadOf(UseTraitInsteadof $insteadof) {
+            $lower = strtolower($insteadof->method());
+            if (isset($this->insteadOfs[$lower])) {
+                throw new \Exception('An *insteadof* already exists for method ' . $insteadof->method());
+            }
+            $this->insteadOfs[$lower] = $insteadof;
+        }
+
+        public function addAlias(UseTraitAlias $alias) {
+            $lower = strtolower($alias->alias());
+            if (isset($this->aliases[$lower])) {
+                throw new \Exception('An *as* already exists for method ' . $alias->alias());
+            }
+            $this->aliases[$lower] = $alias;
+        }
+
+        public function subStmts():array {
+            return [];
+        }
+
+        public function unparse():\PhpParser\Node {
+            $traits = [];
+            foreach ($this->traits as $trait) {
+                $traits[] = new \PhpParser\Node\Name\FullyQualified($trait);
+            }
+            $adaptions = [];
+            foreach ($this->insteadOfs as $method => $adaption) {
+                foreach ($adaption->unparse() as $item) {
+                    $adaptions[] = $item;
+                }
+            }
+            return new \PhpParser\Node\Stmt\TraitUse($traits, $adaptions);
+        }
+    }
+
+    class UseTraitInsteadof extends Node {
+        /**
+         * The method in question
+         * @var string
+         */
+        private $method;
+        /**
+         * The trait this method should come from
+         * @var string
+         */
+        private $trait;
+        /**
+         * The traits this method should *not* come from :P
+         * These traits must be used in the class.
+         * @var string[]
+         */
+        private $insteadOf;
+
+        /**
+         * @param string   $trait
+         * @param string   $method
+         * @param string[] $insteadOf
+         */
+        public function __construct($trait, $method, array $insteadOf) {
+            $this->trait     = $trait;
+            $this->method    = $method;
+            $this->insteadOf = $insteadOf;
+        }
+
+        public function method() {
+            return $this->method;
+        }
+
+        public function unparse():\PhpParser\Node\Stmt\TraitUseAdaptation\Precedence {
+            $insteadOf = [];
+            foreach ($this->insteadOf as $trait) {
+                $insteadOf[] = new \PhpParser\Node\Name\FullyQualified($trait);
+            }
+            return new \PhpParser\Node\Stmt\TraitUseAdaptation\Precedence(
+                new \PhpParser\Node\Name\FullyQualified($this->trait),
+                $this->method,
+                $insteadOf
+            );
+        }
+    }
+
+    class UseTraitAlias extends Node {
+        /**
+         * The name of the alias
+         * @var string
+         */
+        private $alias;
+        /**
+         * The method being aliased
+         * @var string
+         */
+        private $method;
+        /**
+         * The trait the method should come from. If none, use whatever trait implements the method after the
+         * "insteadof" rules have been applied.
+         * @var string|null
+         */
+        private $trait;
+        /**
+         * Any adjustments to visibility. Default to visibility from the trait.
+         * @var string|null
+         */
+        private $visibility;
+
+        /**
+         * @param string      $alias
+         * @param string      $method
+         * @param null|string $trait
+         * @param null|string $visibility
+         */
+        public function __construct($alias, $method, $trait, $visibility) {
+            $this->alias      = $alias;
+            $this->method     = $method;
+            $this->trait      = $trait;
+            $this->visibility = $visibility;
+        }
+
+        public function alias() {
+            return $this->alias;
+        }
+
+        public function unparse():\PhpParser\Node\Stmt\TraitUseAdaptation\Alias {
+            return new \PhpParser\Node\Stmt\TraitUseAdaptation\Alias(
+                $this->trait ? new \PhpParser\Node\Name\FullyQualified($this->trait) : null,
+                $this->method,
+                $this->visibility ? Visibility::unparse($this->visibility) : null,
+                $this->alias === $this->method ? null : $this->alias
+            );
+        }
     }
 
     abstract class ClassMember extends AbstractClassMember {
