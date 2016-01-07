@@ -4,7 +4,9 @@
         "phpunit/phpunit": "^4.7",
         "zendframework/zendframework": "2.5.2",
         "jesseschalken/magic-utils": "^0.2.0",
-        "docopt/docopt": "1.0.2"
+        "docopt/docopt": "1.0.2",
+        "phpdocumentor/type-resolver": "*",
+        "phpdocumentor/reflection-docblock": "*"
     },
     "autoload": {
         "files": ["src/autoload.php"]
