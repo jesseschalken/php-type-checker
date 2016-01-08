@@ -81,7 +81,7 @@ namespace JesseSchalken\PhpTypeChecker\Node {
                 $self           = new self($file->nullLoc());
                 $self->path     = $file->path;
                 $self->shebang  = $file->shebang;
-                $self->contents = (new Parser\Parser($file, $defined))->parseStmts($self->loc(), $file->nodes);
+                $self->contents = (new Parser\Parser($file, $defined, $errors))->parseStmts($self->loc(), $file->nodes);
                 $result[]       = $self;
             }
             return $result;
@@ -495,16 +495,20 @@ namespace JesseSchalken\PhpTypeChecker\Parser {
         private $parent;
         /** @var string|null */
         private $function;
+        /** @var ErrorReceiver */
+        private $errors;
 
         /**
          * @param ParsedFile         $file
          * @param GlobalDefinedNames $globals
+         * @param ErrorReceiver      $errors
          */
-        public function __construct($file, GlobalDefinedNames $globals) {
+        public function __construct($file, GlobalDefinedNames $globals, ErrorReceiver $errors) {
             $this->globals     = $globals;
             $this->locals      = new DefinedNamesCaseSensitive();
             $this->finallys[0] = new Stmt\Block($file->nullLoc());
             $this->file        = $file;
+            $this->errors      = $errors;
             $this->resetNamespace();
         }
 
@@ -1068,7 +1072,7 @@ namespace JesseSchalken\PhpTypeChecker\Parser {
 
         private function checkCompatible(Type\Type $sup, Type\Type $sub) {
             if (!$sup->triviallyContains_($sub)) {
-                print "Warning " . $sub->toString() . " is not compatible with " . $sup->toString() . "\n";
+                $this->errors->add("Warning $sub is not compatible with $sup", $sup->loc());
             }
         }
 
@@ -4534,6 +4538,10 @@ namespace JesseSchalken\PhpTypeChecker\Node\Type {
          * @return string
          */
         public abstract function toString($atomic = false);
+
+        public final function __toString() {
+            return $this->toString();
+        }
 
         public final function triviallyContains_(Type $type) {
             foreach ($type->split() as $t) {
