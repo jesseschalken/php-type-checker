@@ -669,9 +669,9 @@ namespace JesseSchalken\PhpTypeChecker\Parser {
             } elseif ($node instanceof \PhpParser\Node\Stmt\For_) {
                 return new Stmt\For_(
                     $loc,
-                    $this->parseExprs($node->init),
-                    $this->parseExprs($node->cond),
-                    $this->parseExprs($node->loop),
+                    new Stmt\Comma($loc, $this->parseExprs($node->init)),
+                    new Stmt\Comma($loc, $this->parseExprs($node->cond)),
+                    new Stmt\Comma($loc, $this->parseExprs($node->loop)),
                     $this->parseStmts($loc, $node->stmts)
                 );
             } elseif ($node instanceof \PhpParser\Node\Stmt\Break_) {
@@ -2713,24 +2713,49 @@ namespace JesseSchalken\PhpTypeChecker\Node\Stmt {
         }
     }
 
-    class For_ extends SingleStmt {
+    /**
+     * Special statements used for the init/cond/loop parts of a for loop.
+     * Is like the comma operator in C and JavaScript but can actually only
+     * be used in the head of a for loop.
+     */
+    class Comma extends SingleStmt {
         /** @var Expr\Expr[] */
-        private $init = [];
-        /** @var Expr\Expr[] */
-        private $cond = [];
-        /** @var Expr\Expr[] */
-        private $loop = [];
-        /** @var Stmt */
-        private $body;
+        private $exprs = [];
 
         /**
          * @param CodeLoc     $loc
-         * @param Expr\Expr[] $init
-         * @param Expr\Expr[] $cond
-         * @param Expr\Expr[] $loop
-         * @param Stmt        $body
+         * @param Expr\Expr[] $exprs
          */
-        public function __construct(CodeLoc $loc, array $init, array $cond, array $loop, Stmt $body) {
+        public function __construct(CodeLoc $loc, array $exprs) {
+            parent::__construct($loc);
+            $this->exprs = $exprs;
+        }
+
+        public function subStmts():array {
+            return $this->exprs;
+        }
+
+        /** @return \PhpParser\Node\Expr[] */
+        public function unparse():array {
+            $nodes = [];
+            foreach ($this->exprs as $expr) {
+                $nodes[] = $expr->unparse_();
+            }
+            return $nodes;
+        }
+    }
+
+    class For_ extends SingleStmt {
+        /** @var Comma */
+        private $init;
+        /** @var Comma */
+        private $cond;
+        /** @var Comma */
+        private $loop;
+        /** @var Stmt */
+        private $body;
+
+        public function __construct(CodeLoc $loc, Comma $init, Comma $cond, Comma $loop, Stmt $body) {
             parent::__construct($loc);
             $this->init = $init;
             $this->cond = $cond;
@@ -2739,31 +2764,19 @@ namespace JesseSchalken\PhpTypeChecker\Node\Stmt {
         }
 
         public function subStmts():array {
-            return array_merge(
+            return [
                 $this->init,
                 $this->cond,
                 $this->loop,
-                [$this->body]
-            );
+                $this->body,
+            ];
         }
 
         public function unparse():array {
-            $init = [];
-            $cond = [];
-            $loop = [];
-            foreach ($this->init as $expr) {
-                $init[] = $expr->unparse_();
-            }
-            foreach ($this->cond as $expr) {
-                $cond[] = $expr->unparse_();
-            }
-            foreach ($this->loop as $expr) {
-                $loop[] = $expr->unparse_();
-            }
             return [new \PhpParser\Node\Stmt\For_([
-                'init'  => $init,
-                'cond'  => $cond,
-                'loop'  => $loop,
+                'init'  => $this->init->unparse(),
+                'cond'  => $this->cond->unparse(),
+                'loop'  => $this->loop->unparse(),
                 'stmts' => $this->body->unparse(),
             ])];
         }
