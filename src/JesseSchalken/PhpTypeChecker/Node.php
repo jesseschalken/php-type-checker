@@ -39,12 +39,20 @@ namespace JesseSchalken\PhpTypeChecker\Node {
     abstract class Node {
         /** @var CodeLoc */
         private $loc;
+        /** @var int */
+        private $id;
 
         public function __construct(CodeLoc $loc) {
+            static $_id = 1;
             $this->loc = $loc;
+            $this->id  = $_id++;
         }
 
-        public final function loc() {
+        public final function id():int {
+            return $this->id;
+        }
+
+        public final function loc():CodeLoc {
             return $this->loc;
         }
     }
@@ -820,7 +828,7 @@ namespace JesseSchalken\PhpTypeChecker\Parser {
                         $stmts[] = new Stmt\Property(
                             $this->locateNode($prop),
                             $prop->name,
-                            $type ?: new Type\Mixed($loc),
+                            $type ?: new Type\Type($loc, Type\Type::mixed($loc)),
                             $this->parseExprNull($prop->default),
                             $visibility,
                             $static
@@ -919,7 +927,10 @@ namespace JesseSchalken\PhpTypeChecker\Parser {
             string $string,
             \phpDocumentor\Reflection\DocBlock\Context $context
         ) {
-            $context = new \phpDocumentor\Reflection\Types\Context($context->getNamespace(), $context->getNamespaceAliases());
+            $context = new \phpDocumentor\Reflection\Types\Context(
+                $context->getNamespace(),
+                $context->getNamespaceAliases()
+            );
             try {
                 $type = (new \phpDocumentor\Reflection\TypeResolver())->resolve($string, $context);
             } catch (\InvalidArgumentException $e) {
@@ -936,59 +947,61 @@ namespace JesseSchalken\PhpTypeChecker\Parser {
             if ($type instanceof \phpDocumentor\Reflection\Types\Object_) {
                 $fqsen = $type->getFqsen();
                 if ($fqsen) {
-                    return new Type\Object($loc, trim($fqsen->__toString(), '\\'));
+                    return Type\Type::object($loc, trim($fqsen->__toString(), '\\'));
                 } else {
-                    return new Type\Object($loc);
+                    $type = Type\SimpleType::OBJECT;
                 }
             } else if ($type instanceof \phpDocumentor\Reflection\Types\Array_) {
-                $inner = $type->getValueType();
-                if ($inner instanceof \phpDocumentor\Reflection\Types\Mixed) {
-                    return new Type\Array_($loc, new Type\Mixed($loc));
+                $value = $type->getValueType();
+                if ($value instanceof \phpDocumentor\Reflection\Types\Mixed) {
+                    $type = Type\SimpleType::OBJECT;
                 } else {
-                    return new Type\Array_($loc, $this->parseDocTypeObject($loc, $inner, $context));
+                    return Type\Type::array_($loc, $this->parseDocTypeObject($loc, $value, $context));
                 }
             } else if ($type instanceof \phpDocumentor\Reflection\Types\Null_) {
-                return new Type\Null_($loc);
+                $type = Type\SimpleType::NULL;
             } else if ($type instanceof \phpDocumentor\Reflection\Types\Void) {
-                return new Type\Null_($loc);
+                $type = Type\SimpleType::NULL;
             } else if ($type instanceof \phpDocumentor\Reflection\Types\Static_) {
-                return new Type\Static_($loc);
+                $type = [new Type\Static_($loc)];
             } else if ($type instanceof \phpDocumentor\Reflection\Types\Resource) {
-                return new Type\Resource($loc);
+                $type = Type\SimpleType::RESOURCE;
             } else if ($type instanceof \phpDocumentor\Reflection\Types\Mixed) {
-                return new Type\Mixed($loc);
+                return Type\Type::mixed($loc);
             } else if ($type instanceof \phpDocumentor\Reflection\Types\Scalar) {
-                return new Type\Scalar($loc);
+                return Type\Type::scalar($loc);
             } else if ($type instanceof \phpDocumentor\Reflection\Types\This) {
-                return new Type\This($loc);
+                return Type\Type::this($loc);
             } else if ($type instanceof \phpDocumentor\Reflection\Types\Boolean) {
-                return new Type\Bool_($loc);
+                $type = Type\SimpleType::BOOL;
             } else if ($type instanceof \phpDocumentor\Reflection\Types\Callable_) {
-                return new Type\Callable_($loc);
+                return Type\Type::callable_($loc);
             } else if ($type instanceof \phpDocumentor\Reflection\Types\Compound) {
                 $types = [];
                 for ($i = 0; $type->has($i); $i++) {
-                    $types[] = $this->parseDocTypeObject($loc, $type->get($i), $context);
+                    $types[] = $this->parseDocTypeObject($loc, $type->get($i), $context)->split();
                 }
-                return new Type\Union($loc, $types);
+                return new Type\Type($loc, $types);
             } else if ($type instanceof \phpDocumentor\Reflection\Types\Self_) {
                 if (!$this->class) {
                     throw new \Exception('Use of "self" outside a class');
                 }
-                return new Type\Object($loc, $this->class);
+                return Type\Type::object($loc, $this->class);
             } else if ($type instanceof \phpDocumentor\Reflection\Types\Float_) {
-                return new Type\Float_($loc);
+                $type = Type\SimpleType::FLOAT;
             } else if ($type instanceof \phpDocumentor\Reflection\Types\String_) {
-                return new Type\String_($loc);
+                $type = Type\SimpleType::STRING;
             } else if ($type instanceof \phpDocumentor\Reflection\Types\Integer) {
-                return new Type\Int_($loc);
+                $type = Type\SimpleType::INT;
             } else {
                 throw new \Exception('Unhandled PhpDoc type: ' . get_class($type));
             }
+
+            return Type\Type::simpleType($loc, $type);
         }
 
         private function checkCompatible(Type\Type $sup, Type\Type $sub) {
-            if (!$sup->triviallyContains($sub)) {
+            if (!$sup->triviallyContainsType($sub)) {
                 $this->errors->add("Warning $sub is not compatible with $sup", $sup->loc());
             }
         }
@@ -1009,7 +1022,10 @@ namespace JesseSchalken\PhpTypeChecker\Parser {
                 $default = $this->parseExprNull($param->default);
 
                 if ($default && $default instanceof Expr\Literal && $default->value() === null) {
-                    $type = new Type\Union($loc, [$type, new Type\Null_($default->loc())]);
+                    $type = new Type\Type($loc, array_merge(
+                        $type->split(),
+                        [new Type\SimpleType($default->loc(), Type\SimpleType::NULL)]
+                    ));
                 }
 
                 $paramDefaults[$name] = $default;
@@ -1022,7 +1038,11 @@ namespace JesseSchalken\PhpTypeChecker\Parser {
             if ($comment = $this->parseDocBlock($node->getDocComment())) {
                 /** @var \phpDocumentor\Reflection\DocBlock\Tag\ReturnTag $tag */
                 foreach ($comment->getTagsByName('return') as $tag) {
-                    if ($type = $this->parseDocType($this->locateComment($comment), $tag->getType(), $comment->getContext())) {
+                    if ($type = $this->parseDocType(
+                        $this->locateComment($comment),
+                        $tag->getType(),
+                        $comment->getContext()
+                    )) {
                         $this->checkCompatible($returnType, $type);
                         $returnType = $type;
                     }
@@ -1030,9 +1050,13 @@ namespace JesseSchalken\PhpTypeChecker\Parser {
                 /** @var \phpDocumentor\Reflection\DocBlock\Tag\ParamTag $tag */
                 foreach ($comment->getTagsByName('param') as $tag) {
                     $name = substr($tag->getVariableName(), 1);
-                    if ($type = $this->parseDocType($this->locateComment($comment), $tag->getType(), $comment->getContext())) {
+                    if ($type = $this->parseDocType(
+                        $this->locateComment($comment),
+                        $tag->getType(),
+                        $comment->getContext()
+                    )) {
                         if (!isset($paramTypes[$name])) {
-                            $paramTypes[$name] = new Type\Mixed($this->locateComment($comment));
+                            $paramTypes[$name] = Type\Type::mixed($this->locateComment($comment));
                         }
                         $this->checkCompatible($paramTypes[$name], $type);
                         $paramTypes[$name] = $type;
@@ -1062,36 +1086,45 @@ namespace JesseSchalken\PhpTypeChecker\Parser {
          */
         private function parseType(CodeLoc $loc, $type):Type\Type {
             if ($type === null) {
-                return new Type\Mixed($loc);
+                return Type\Type::mixed($loc);
             } else if (is_string($type)) {
                 switch (strtolower($type)) {
                     case 'int':
                     case 'integer':
-                        return new Type\Int_($loc);
+                        $type = Type\SimpleType::INT;
+                        break;
                     case 'string':
-                        return new Type\String_($loc);
+                        $type = Type\SimpleType::STRING;
+                        break;
                     case 'double':
                     case 'float':
-                        return new Type\Float_($loc);
+                        $type = Type\SimpleType::FLOAT;
+                        break;
                     case 'bool':
                     case 'boolean':
-                        return new Type\Bool_($loc);
+                        $type = Type\SimpleType::BOOL;
+                        break;
                     case 'null':
                     case 'void':
-                        return new Type\Null_($loc);
+                        $type = Type\SimpleType::NULL;
+                        break;
                     case 'object':
-                        return new Type\Object($loc);
+                        $type = Type\SimpleType::OBJECT;
+                        break;
                     case 'resource':
-                        return new Type\Resource($loc);
+                        $type = Type\SimpleType::RESOURCE;
+                        break;
                     case 'array':
-                        return new Type\Array_($loc, new Type\Mixed($loc));
+                        $type = Type\SimpleType::ARRAY;
+                        break;
                     case 'callable':
                         return new Type\Callable_($loc);
                     default:
                         throw new \Exception('Invalid simple type: ' . $type);
                 }
+                return Type\Type::simpleType($loc, $type);
             } else if ($type instanceof \PhpParser\Node\Name) {
-                return new Type\Object($loc, $this->resolveClass($type)->toString());
+                return new Type\Type($loc, [new Type\Object($loc, $this->resolveClass($type)->toString())]);
             } else {
                 throw new \Exception('huh?');
             }
@@ -2358,7 +2391,14 @@ namespace JesseSchalken\PhpTypeChecker\Node\Stmt {
          * @param string         $visibility
          * @param bool           $static
          */
-        public function __construct(CodeLoc $loc, string $name, Type\Type $type, Expr\Expr $default = null, string $visibility, bool $static) {
+        public function __construct(
+            CodeLoc $loc,
+            string $name,
+            Type\Type $type,
+            Expr\Expr $default = null,
+            string $visibility,
+            bool $static
+        ) {
             parent::__construct($loc, $visibility, $static);
             $this->name    = $name;
             $this->type    = $type;
@@ -4328,170 +4368,241 @@ namespace JesseSchalken\PhpTypeChecker\Node\Expr {
 namespace JesseSchalken\PhpTypeChecker\Node\Type {
 
     use JesseSchalken\PhpTypeChecker\Node\CodeLoc;
-    use JesseSchalken\PhpTypeChecker\Node\Node;
+    use JesseSchalken\PhpTypeChecker\Node\VarState;
 
-    abstract class Type extends Node {
+    interface IType extends VarState\IVarState {
         /**
          * @return null|string|\PhpParser\Node\Name
          */
-        public abstract function toTypeHint();
+        public function toTypeHint();
 
-        public abstract function toString(bool $atomic = false):string;
+        public function toString():string;
 
-        public final function __toString():string {
+        public function triviallyContainsSingleType(SingleType $type):bool;
+    }
+
+    final class Type extends VarState\VarState implements IType {
+        static function static_(CodeLoc $loc):self {
+            return new self($loc, new Static_($loc));
+        }
+
+        static function this(CodeLoc $loc):self {
+            return new self($loc, new This($loc));
+        }
+
+        static function array_(CodeLoc $loc, self $inner):self {
+            return new self($loc, new Array_($loc, $inner));
+        }
+
+        static function object(CodeLoc $loc, string $class):self {
+            return new self($loc, [new Object($loc, $class)]);
+        }
+
+        static function callable_(CodeLoc $loc):self {
+            return new self($loc, [new Callable_($loc)]);
+        }
+
+        static function simpleType(CodeLoc $loc, int $type):self {
+            return new self($loc, [new SimpleType($loc, $type)]);
+        }
+
+        static function mixed(CodeLoc $loc):self {
+            return new self($loc, [
+                SimpleType::INT,
+                SimpleType::STRING,
+                SimpleType::FLOAT,
+                SimpleType::BOOL,
+                SimpleType::NULL,
+                SimpleType::OBJECT,
+                SimpleType::RESOURCE,
+                SimpleType::ARRAY,
+            ]);
+        }
+
+        static function scalar(CodeLoc $loc):self {
+            return new self($loc, [
+                SimpleType::INT,
+                SimpleType::STRING,
+                SimpleType::FLOAT,
+                SimpleType::BOOL,
+            ]);
+        }
+
+        /** @var SingleType[] */
+        private $types = [];
+
+        /**
+         * @param CodeLoc      $loc
+         * @param SingleType[] $types
+         */
+        public function __construct(CodeLoc $loc, array $types = []) {
+            parent::__construct($loc);
+            $this->types = $types;
+        }
+
+        public function toTypeHint() {
+            if (count($this->types) == 1) {
+                return $this->types[0]->toTypeHint();
+            } else {
+                return null;
+            }
+        }
+
+        public function triviallyContainsSingleType(SingleType $type):bool {
+            foreach ($this->types as $t) {
+                if ($t->triviallyContainsSingleType($type)) {
+                    return true;
+                }
+            }
+            return false;
+        }
+
+        public function __toString():string {
             return $this->toString();
         }
 
-        public final function triviallyContains(Type $type):bool {
-            foreach ($type->split() as $t) {
-                if (!$this->_triviallyContains($t)) {
+        public function triviallyContainsType(Type $type):bool {
+            foreach ($type->types as $t) {
+                if (!$this->triviallyContainsSingleType($t)) {
                     return false;
                 }
             }
             return true;
         }
 
-        abstract protected function _triviallyContains(SingleType $type):bool;
-
-        public final function triviallyEquivelant(Type $type):bool {
-            return
-                $this->triviallyContains($type) &&
-                $type->triviallyContains($this);
+        public function isEmpty():bool {
+            return count($this->types) == 0;
         }
 
-        public final function isEmpty():bool {
-            return count($this->split()) == 0;
+        public function isMixed():bool {
+            return $this->triviallyContainsType(self::mixed($this->loc()));
         }
 
         /** @return SingleType[] */
-        public abstract function split();
-
-        public final function isMixed():bool {
-            return $this->triviallyEquivelant(new Mixed($this->loc()));
+        public function split():array {
+            return $this->types;
         }
     }
 
-    abstract class SingleType extends Type {
-        /** @return SingleType[] */
-        public final function split():array {
-            return [$this];
+    abstract class SingleType extends VarState\SingleVarState implements IType {
+        public final function triviallyContainsSingleVarState(VarState\SingleVarState $state):bool {
+            if ($state instanceof SingleType) {
+                return $this->triviallyContainsSingleType($state);
+            } else {
+                return false;
+            }
         }
     }
 
-    class Int_ extends SingleType {
+    class SimpleType extends SingleType {
+        const INT      = 0;
+        const STRING   = 1;
+        const BOOL     = 2;
+        const FLOAT    = 3;
+        const NULL     = 4;
+        const ARRAY    = 5;
+        const RESOURCE = 6;
+        const OBJECT   = 7;
+
+        /** @var int */
+        private $type;
+
+        public function __construct(CodeLoc $loc, int $type) {
+            parent::__construct($loc);
+            $this->type = $type;
+        }
+
         public function toTypeHint() {
-            return 'int';
+            switch ($this->type) {
+                case self::INT:
+                    return 'int';
+                case self::STRING:
+                    return 'string';
+                case self::BOOL:
+                    return 'bool';
+                case self::FLOAT:
+                    return 'float';
+                case self::ARRAY:
+                    return 'array';
+                default:
+                    return null;
+            }
         }
 
-        public function toString(bool $atomic = false):string {
-            return 'int';
+        public function toString():string {
+            static $strings = [
+                self::INT      => 'int',
+                self::STRING   => 'string',
+                self::BOOL     => 'bool',
+                self::FLOAT    => 'float',
+                self::NULL     => 'null',
+                self::ARRAY    => 'array',
+                self::RESOURCE => 'resource',
+                self::OBJECT   => 'object',
+            ];
+            return $strings[$this->type];
         }
 
-        protected function _triviallyContains(SingleType $type):bool {
-            return $type instanceof self;
-        }
-    }
-
-    class String_ extends SingleType {
-        public function toTypeHint() {
-            return 'string';
-        }
-
-        public function toString(bool $atomic = false):string {
-            return 'string';
-        }
-
-        protected function _triviallyContains(SingleType $type):bool {
-            return $type instanceof self;
-        }
-    }
-
-    class Null_ extends SingleType {
-        public function toTypeHint() {
-            return 'null';
-        }
-
-        public function toString(bool $atomic = false):string {
-            return 'null';
-        }
-
-        protected function _triviallyContains(SingleType $type):bool {
-            return $type instanceof self;
-        }
-    }
-
-    class Bool_ extends SingleType {
-        public function toTypeHint() {
-            return 'bool';
-        }
-
-        public function toString(bool $atomic = false):string {
-            return 'bool';
-        }
-
-        protected function _triviallyContains(SingleType $type):bool {
-            return $type instanceof self;
+        public function triviallyContainsSingleType(SingleType $type):bool {
+            if ($type instanceof self) {
+                return $this->type == $type->type;
+            } else if (
+                $type instanceof Object ||
+                $type instanceof Static_ ||
+                $type instanceof This
+            ) {
+                return $this->type == self::OBJECT;
+            } else if ($type instanceof SingleValue) {
+                return $this->type = $type->simpleType();
+            } else {
+                return false;
+            }
         }
     }
 
-    class Float_ extends SingleType {
-        public function toTypeHint() {
-            return 'float';
+    class SingleValue extends SingleType {
+        /** @var int|string|bool|float|null */
+        private $value;
+
+        /**
+         * @param CodeLoc                    $loc
+         * @param int|string|float|bool|null $value
+         */
+        public function __construct(CodeLoc $loc, $value) {
+            parent::__construct($loc);
+            $this->value = $value;
         }
 
-        public function toString(bool $atomic = false):string {
-            return 'float';
-        }
-
-        protected function _triviallyContains(SingleType $type):bool {
-            return $type instanceof self;
-        }
-    }
-
-    class Resource extends SingleType {
-        public function toTypeHint() {
-            return null;
-        }
-
-        public function toString(bool $atomic = false):string {
-            return 'resource';
-        }
-
-        protected function _triviallyContains(SingleType $type):bool {
-            return $type instanceof self;
-        }
-    }
-
-    class Mixed extends SingleType {
         public function toTypeHint() {
             return null;
         }
 
-        public function toString(bool $atomic = false):string {
-            return 'mixed';
+        public function toString():string {
+            return var_export($this->value, true);
         }
 
-        protected function _triviallyContains(SingleType $type):bool {
-            return true;
-        }
-    }
-
-    class Scalar extends SingleType {
-        public function toTypeHint() {
-            return null;
+        public function triviallyContainsSingleType(SingleType $type):bool {
+            if ($type instanceof self) {
+                return $type->value === $this->value;
+            } else {
+                return false;
+            }
         }
 
-        public function toString(bool $atomic = false):string {
-            return 'scalar';
-        }
-
-        protected function _triviallyContains(SingleType $type):bool {
-            return
-                $type instanceof String_ ||
-                $type instanceof Bool_ ||
-                $type instanceof Scalar ||
-                $type instanceof Int_ ||
-                $type instanceof Float_;
+        public function simpleType():int {
+            if (is_string($this->value)) {
+                return SimpleType::STRING;
+            } else if (is_bool($this->value)) {
+                return SimpleType::BOOL;
+            } else if (is_int($this->value)) {
+                return SimpleType::INT;
+            } else if (is_float($this->value)) {
+                return SimpleType::FLOAT;
+            } else if (is_null($this->value)) {
+                return SimpleType::NULL;
+            } else {
+                throw new \Exception('Invalid type for SingleValue: ' . gettype($this->value));
+            }
         }
     }
 
@@ -4507,43 +4618,34 @@ namespace JesseSchalken\PhpTypeChecker\Node\Type {
             return 'callable';
         }
 
-        public function toString(bool $atomic = false):string {
+        public function toString():string {
             return 'callable';
         }
 
-        protected function _triviallyContains(SingleType $type):bool {
+        public function triviallyContainsSingleType(SingleType $type):bool {
             return $type instanceof self;
         }
     }
 
     class Object extends SingleType {
-        /** @var string|null */
+        /** @var string */
         private $class;
 
-        public function __construct(CodeLoc $loc, string $class = null) {
+        public function __construct(CodeLoc $loc, string $class) {
             parent::__construct($loc);
             $this->class = $class;
         }
 
         public function toTypeHint() {
-            if ($this->class) {
-                return new \PhpParser\Node\Name\FullyQualified($this->class);
-            } else {
-                return null;
-            }
+            return new \PhpParser\Node\Name\FullyQualified($this->class);
         }
 
-        public function toString(bool $atomic = false):string {
-            return $this->class ?: 'object';
+        public function toString():string {
+            return $this->class;
         }
 
-        protected function _triviallyContains(SingleType $type):bool {
-            if ($this->class === null) {
-                return
-                    $type instanceof self ||
-                    $type instanceof Static_ ||
-                    $type instanceof This;
-            } else if ($type instanceof self) {
+        public function triviallyContainsSingleType(SingleType $type):bool {
+            if ($type instanceof self) {
                 return strtolower($type->class) == strtolower($this->class);
             } else {
                 return false;
@@ -4556,11 +4658,11 @@ namespace JesseSchalken\PhpTypeChecker\Node\Type {
             return null;
         }
 
-        public function toString(bool $atomic = false):string {
+        public function toString():string {
             return 'static';
         }
 
-        protected function _triviallyContains(SingleType $type):bool {
+        public function triviallyContainsSingleType(SingleType $type):bool {
             return $type instanceof self;
         }
     }
@@ -4570,99 +4672,168 @@ namespace JesseSchalken\PhpTypeChecker\Node\Type {
             return null;
         }
 
-        public function toString(bool $atomic = false):string {
+        public function toString():string {
             return '$this';
         }
 
-        protected function _triviallyContains(SingleType $type):bool {
+        public function triviallyContainsSingleType(SingleType $type):bool {
             return $type instanceof self;
         }
     }
 
-    class Union extends Type {
-        /** @var Type[] */
-        private $types = [];
+    class Array_ extends SingleType {
+        /** @var VarState\VarState */
+        private $inner;
 
-        /**
-         * @param CodeLoc $loc
-         * @param Type[]  $types
-         */
-        public function __construct(CodeLoc $loc, array $types) {
+        public function __construct(CodeLoc $loc, VarState\VarState $inner) {
             parent::__construct($loc);
-            $this->types = $types;
+            $this->inner = $inner;
         }
 
         public function toTypeHint() {
-            if (count($this->types) == 1) {
-                return $this->types[0]->toTypeHint();
+            return 'array';
+        }
+
+        public function toString():string {
+            return $this->inner->toString(true) . '[]';
+        }
+
+        public function triviallyContainsSingleType(SingleType $type):bool {
+            if ($type instanceof self) {
+                return $this->inner->triviallyContainsVarState($type->inner);
             } else {
-                return null;
+                return false;
             }
         }
+    }
+}
 
-        public function toString(bool $atomic = false):string {
-            switch (count($this->types)) {
-                case 0:
-                    return '()';
+namespace JesseSchalken\PhpTypeChecker\Node\VarState {
+
+    use JesseSchalken\PhpTypeChecker\Node\CodeLoc;
+    use JesseSchalken\PhpTypeChecker\Node\Node;
+    use JesseSchalken\PhpTypeChecker\Node\Type;
+
+    interface IVarState {
+        public function toString():string;
+
+        public function triviallyContainsSingleVarState(SingleVarState $state):bool;
+    }
+
+    abstract class VarState extends Node implements IVarState {
+        /** @return SingleVarState[] */
+        abstract function split():array;
+
+        final function toString(bool $atomic = false):string {
+            $parts = [];
+            foreach ($this->split() as $state) {
+                $parts[] = $state->toString();
+            }
+            switch (count($parts)) {
                 case 1:
-                    return $this->types[0]->toString($atomic);
+                    return $parts[0];
                 default:
-                    $types = [];
-                    foreach ($this->types as $type) {
-                        $types[] = $type->toString(false);
-                    }
-                    $string = join('|', $types);
-                    return $atomic ? "($string)" : $string;
+                    $join = join('|', $parts);
+                    return $atomic ? "($join)" : $join;
             }
         }
 
-        protected function _triviallyContains(SingleType $type):bool {
-            foreach ($this->split() as $t) {
-                if ($t->_triviallyContains($type)) {
+        public final function triviallyContainsSingleVarState(SingleVarState $state):bool {
+            foreach ($this->split() as $part) {
+                if ($part->triviallyContainsSingleVarState($state)) {
                     return true;
                 }
             }
             return false;
         }
 
-        public function split():array {
-            $types = [];
-            foreach ($this->types as $type) {
-                foreach ($type->split() as $t) {
-                    $types[] = $t;
+        public final function triviallyContainsVarState(self $state) {
+            foreach ($state->split() as $part) {
+                if (!$this->triviallyContainsSingleVarState($part)) {
+                    return false;
                 }
             }
-            return $types;
+            return true;
+        }
+
+        public final function isTriviallyEquivelant(self $that):bool {
+            return
+                $this->triviallyContainsVarState($that) &&
+                $that->triviallyContainsVarState($this);
         }
     }
 
-    class Array_ extends SingleType {
-        /** @var Type */
-        private $inner;
+    final class VarStates extends VarState {
+        /** @var SingleVarState[] */
+        private $states = [];
 
-        public function __construct(CodeLoc $loc, Type $inner) {
+        /**
+         * @param CodeLoc          $loc
+         * @param SingleVarState[] $states
+         */
+        public function __construct(CodeLoc $loc, array $states) {
             parent::__construct($loc);
-            $this->inner = $inner;
         }
 
-        public function toTypeHint() {
-            if ($this->inner->isMixed()) {
-                return 'array';
+        function split():array {
+            return $this->states;
+        }
+    }
+
+    abstract class SingleVarState extends Node implements IVarState {
+    }
+
+    final class Reference extends SingleVarState {
+        /** @var Type\Type */
+        private $type;
+
+        public function __construct(CodeLoc $loc, Type\Type $type) {
+            parent::__construct($loc);
+            $this->type = $type;
+        }
+
+        public function toString():string {
+            $type = $this->type->toString();
+            return "ref<$type>";
+        }
+
+        public function triviallyContainsSingleVarState(SingleVarState $state):bool {
+            if ($state instanceof self) {
+                return $this->type->isTriviallyEquivelant($state->type);
             } else {
-                return null;
+                return false;
             }
         }
+    }
 
-        public function toString(bool $atomic = false):string {
-            if ($this->inner->isMixed()) {
-                return 'array';
-            } else {
-                return $this->inner->toString(true) . '[]';
-            }
+    class Undefined extends SingleVarState {
+        public function toString():string {
+            return 'undefined';
         }
 
-        protected function _triviallyContains(SingleType $type):bool {
-            return $type instanceof self && $this->inner->triviallyContains($type->inner);
+        public function triviallyContainsSingleVarState(SingleVarState $state):bool {
+            return $state instanceof self;
         }
+    }
+}
+
+namespace JesseSchalken\PhpTypeChecker\TypeInference {
+
+    use JesseSchalken\PhpTypeChecker\Node\Stmt;
+
+    class TypedStmt {
+        /** @var TypeAssignments */
+        private $types;
+        /** @var Stmt\Stmt */
+        private $stmt;
+
+        public function __construct(TypeAssignments $types, Stmt\Stmt $stmt) {
+            $this->types = $types;
+            $this->stmt  = $stmt;
+        }
+    }
+
+    class TypeAssignments {
+
     }
 }
