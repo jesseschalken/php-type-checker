@@ -4733,6 +4733,7 @@ namespace JesseSchalken\PhpTypeChecker\Node\VarState {
                 case 1:
                     return $parts[0];
                 default:
+                    sort($parts, SORT_STRING);
                     $join = join('|', $parts);
                     return $atomic ? "($join)" : $join;
             }
