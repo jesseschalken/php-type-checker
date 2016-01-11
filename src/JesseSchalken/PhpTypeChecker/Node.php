@@ -4553,7 +4553,7 @@ namespace JesseSchalken\PhpTypeChecker\Node\Type {
             ) {
                 return $this->type == self::OBJECT;
             } else if ($type instanceof SingleValue) {
-                return $this->type = $type->simpleType();
+                return $this->type == $type->simpleType();
             } else {
                 return false;
             }
