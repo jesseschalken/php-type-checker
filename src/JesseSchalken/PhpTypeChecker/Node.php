@@ -4383,15 +4383,15 @@ namespace JesseSchalken\PhpTypeChecker\Node\Type {
 
     final class Type extends VarState\VarState implements IType {
         static function static_(CodeLoc $loc):self {
-            return new self($loc, new Static_($loc));
+            return new self($loc, [new Static_($loc)]);
         }
 
         static function this(CodeLoc $loc):self {
-            return new self($loc, new This($loc));
+            return new self($loc, [new This($loc)]);
         }
 
         static function array_(CodeLoc $loc, self $inner):self {
-            return new self($loc, new Array_($loc, $inner));
+            return new self($loc, [new Array_($loc, $inner)]);
         }
 
         static function object(CodeLoc $loc, string $class):self {
