@@ -31,7 +31,7 @@ namespace JesseSchalken\PhpTypeChecker\Node {
     }
 
     class ErrorReceiver {
-        public function add($message, CodeLoc $loc) {
+        public function add(string $message, CodeLoc $loc) {
             print $loc->format($message);
         }
     }
@@ -195,7 +195,7 @@ namespace JesseSchalken\PhpTypeChecker\Parser {
             return \PhpParser\Node\Name::concat($this->namespace, $alias);
         }
 
-        public final function add(\PhpParser\Node\Name $name, $alias = null) {
+        public final function add(\PhpParser\Node\Name $name, string $alias = null) {
             $alias      = $alias ?: $name->getLast();
             $normalized = $this->normalize($alias);
 
@@ -4757,7 +4757,7 @@ namespace JesseSchalken\PhpTypeChecker\Node\VarState {
             return true;
         }
 
-        public final function isTriviallyEquivelant(self $that):bool {
+        public final function isTriviallyEquivalent(self $that):bool {
             return
                 $this->triviallyContainsVarState($that) &&
                 $that->triviallyContainsVarState($this);
@@ -4800,7 +4800,7 @@ namespace JesseSchalken\PhpTypeChecker\Node\VarState {
 
         public function triviallyContainsSingleVarState(SingleVarState $state):bool {
             if ($state instanceof self) {
-                return $this->type->isTriviallyEquivelant($state->type);
+                return $this->type->isTriviallyEquivalent($state->type);
             } else {
                 return false;
             }
