@@ -1643,6 +1643,7 @@ namespace JesseSchalken\PhpTypeChecker\Parser {
 
 namespace JesseSchalken\PhpTypeChecker\Node\Stmt {
 
+    use JesseSchalken\PhpTypeChecker\DataFlow;
     use JesseSchalken\PhpTypeChecker\Node\CodeLoc;
     use JesseSchalken\PhpTypeChecker\Node\Expr;
     use JesseSchalken\PhpTypeChecker\Node\Node;
@@ -1731,6 +1732,8 @@ namespace JesseSchalken\PhpTypeChecker\Node\Stmt {
          * @return \PhpParser\Node[]
          */
         public abstract function unparse():array;
+
+        public abstract function threadState(DataFlow\TypedStmt $stmt);
     }
 
     final class Block extends Stmt {
@@ -1807,6 +1810,9 @@ namespace JesseSchalken\PhpTypeChecker\Node\Stmt {
                 $this->cond->unparse_(),
                 $this->body->unparse()
             )];
+        }
+
+        public function pushState(ProgramState $state) {
         }
     }
 
@@ -4367,6 +4373,7 @@ namespace JesseSchalken\PhpTypeChecker\Node\Expr {
 
 namespace JesseSchalken\PhpTypeChecker\Node\Type {
 
+    use JesseSchalken\PhpTypeChecker\Node;
     use JesseSchalken\PhpTypeChecker\Node\CodeLoc;
     use JesseSchalken\PhpTypeChecker\Node\VarState;
 
@@ -4682,12 +4689,69 @@ namespace JesseSchalken\PhpTypeChecker\Node\Type {
     }
 
     class Array_ extends SingleType {
-        /** @var VarState\VarState */
-        private $inner;
+        /**
+         * A mapping from specific keys to specific variable states
+         * @var VarState\VarState[]
+         */
+        private $keys = [];
+        /**
+         * The state of all keys not mentioned in $this->keys
+         * @var VarState\VarState
+         */
+        private $default;
 
-        public function __construct(CodeLoc $loc, VarState\VarState $inner) {
+        public function __construct(CodeLoc $loc, VarState\VarState $inner = null) {
             parent::__construct($loc);
-            $this->inner = $inner;
+            // The default state should always include undefined, unless this
+            // represents the local variables of unreachable code.
+            $this->default = $inner ?: new VarState\VarStates($loc, [new VarState\Undefined($loc)]);
+        }
+
+        public function get(string $key = null):VarState\VarState {
+            if ($key === null) {
+                // We don't know what key we're getting, so union the state of all possible keys
+                $state = $this->default;
+                foreach ($this->keys as $s) {
+                    $state = $state->unionVarState($s);
+                }
+                return $state;
+            } else if (isset($this->keys[$key])) {
+                // We have a state for this specific key
+                return $this->keys[$key];
+            } else {
+                // We have a specific key but no state for that key yet
+                return $this->default;
+            }
+        }
+
+        public function set(string $key = null, VarState\VarState $state):self {
+            $self = clone $this;
+            if ($key === null) {
+                // We could be setting any key, so we have to union the given state with all of our inner states
+                $self->default = $self->default->unionVarState($state);
+                foreach ($self->keys as $k => $v) {
+                    $self->keys[$k] = $v->unionVarState($state);
+                }
+            } else {
+                // We are setting a specific key, so overwrite the state with the given state
+                $self->keys[$key] = $state;
+            }
+            return $self;
+        }
+
+        public function map(string $key = null, callable $f):self {
+            $self = clone $this;
+
+            if ($key === null) {
+                $self->default = $f($this->default);
+                foreach ($this->keys as $key => $state) {
+                    $self->keys[$key] = $f($state);
+                }
+            } else {
+                $self->keys[$key] = $f($this->get($key));
+            }
+
+            return $self;
         }
 
         public function toTypeHint() {
@@ -4695,15 +4759,48 @@ namespace JesseSchalken\PhpTypeChecker\Node\Type {
         }
 
         public function toString():string {
-            return $this->inner->toString(true) . '[]';
+            return $this->get()->toString(true) . '[]';
         }
 
         public function triviallyContainsSingleType(SingleType $type):bool {
             if ($type instanceof self) {
-                return $this->inner->triviallyContainsVarState($type->inner);
+                // All of our keys
+                foreach ($this->keys as $key => $state) {
+                    if (!$state->triviallyContainsVarState($type->get($key))) {
+                        return false;
+                    }
+                }
+                // All of their keys
+                /** @var VarState\VarState $state */
+                foreach (array_diff_key($type->keys, $this->keys) as $key => $state) {
+                    if (!$this->default->triviallyContainsVarState($state)) {
+                        return false;
+                    }
+                }
+                // Everything else
+                if ($this->default->triviallyContainsVarState($type->default)) {
+                    return false;
+                }
+                return true;
             } else {
                 return false;
             }
+        }
+
+        public function unionArray(self $that):self {
+            $self = clone $this;
+            // All of our keys
+            foreach ($self->keys as $k => $s) {
+                $self->keys[$k] = $s->unionVarState($that->get($k));
+            }
+            // All of their keys (which we don't already have)
+            /** @var VarState\VarState $s */
+            foreach (array_diff_key($that->keys, $self->keys) as $k => $s) {
+                $self->keys[$k] = $s->unionVarState($this->default);
+            }
+            // Everything else
+            $self->default = $self->default->unionVarState($that->default);
+            return $self;
         }
     }
 }
@@ -4727,12 +4824,15 @@ namespace JesseSchalken\PhpTypeChecker\Node\VarState {
         final function toString(bool $atomic = false):string {
             $parts = [];
             foreach ($this->split() as $state) {
-                $parts[] = $state->toString();
+                $parts[$state->toString()] = true;
             }
             switch (count($parts)) {
+                case 0:
+                    return '()';
                 case 1:
-                    return $parts[0];
+                    return array_keys($parts)[0];
                 default:
+                    $parts = array_keys($parts);
                     sort($parts, SORT_STRING);
                     $join = join('|', $parts);
                     return $atomic ? "($join)" : $join;
@@ -4762,6 +4862,25 @@ namespace JesseSchalken\PhpTypeChecker\Node\VarState {
                 $this->triviallyContainsVarState($that) &&
                 $that->triviallyContainsVarState($this);
         }
+
+        public final function unionVarState(self $other):self {
+            $self = $this;
+            foreach ($other->split() as $state) {
+                $self = $self->unionSingleVarState($state);
+            }
+            return $self;
+        }
+
+        public final function unionSingleVarState(SingleVarState $state):self {
+            $states = $this->split();
+            foreach ($states as $s) {
+                if ($s->triviallyContainsSingleVarState($state)) {
+                    return $this;
+                }
+            }
+            $states[] = $state;
+            return new VarStates($this->loc(), $states);
+        }
     }
 
     final class VarStates extends VarState {
@@ -4774,6 +4893,7 @@ namespace JesseSchalken\PhpTypeChecker\Node\VarState {
          */
         public function __construct(CodeLoc $loc, array $states) {
             parent::__construct($loc);
+            $this->states = $states;
         }
 
         function split():array {
@@ -4818,23 +4938,200 @@ namespace JesseSchalken\PhpTypeChecker\Node\VarState {
     }
 }
 
-namespace JesseSchalken\PhpTypeChecker\TypeInference {
+namespace JesseSchalken\PhpTypeChecker\DataFlow {
 
+    use JesseSchalken\PhpTypeChecker\Node;
+    use JesseSchalken\PhpTypeChecker\Node\CodeLoc;
     use JesseSchalken\PhpTypeChecker\Node\Stmt;
+    use JesseSchalken\PhpTypeChecker\Node\Type;
+    use JesseSchalken\PhpTypeChecker\Node\VarState;
 
-    class TypedStmt {
-        /** @var TypeAssignments */
-        private $types;
-        /** @var Stmt\Stmt */
-        private $stmt;
+    class ProgramState extends Node\Node {
+        /** @var VarState\VarState */
+        private $return;
+        /** @var Type\Array_ */
+        private $locals;
 
-        public function __construct(TypeAssignments $types, Stmt\Stmt $stmt) {
-            $this->types = $types;
-            $this->stmt  = $stmt;
+        public function __construct(CodeLoc $loc) {
+            parent::__construct($loc);
+            // Return starts as null.
+            $this->return = new VarState\VarStates($loc, [new Type\SimpleType($loc, Type\SimpleType::NULL)]);
+            // Locals start as unreachable (not undefined).
+            $this->locals = new Type\Array_($loc, [] /* unreachable */);
+        }
+
+        public function locals():Type\Array_ {
+            return $this->locals;
+        }
+
+        public function return_():VarState\VarState {
+            return $this->return;
+        }
+
+        public function withLocals(Type\Array_ $locals):self {
+            $self         = clone $this;
+            $self->locals = $locals;
+            return $self;
+        }
+
+        public function withReturn(VarState\VarState $return):self {
+            $self         = clone $this;
+            $self->return = $return;
+            return $self;
+        }
+
+        public function mapLocals(callable $f):self {
+            return $this->withLocals($f($this->locals));
+        }
+
+        public function mapReturn(callable $f):self {
+            return $this->withReturn($f($this->return));
+        }
+
+        public function contains(self $that):bool {
+            return
+                $this->locals->triviallyContainsSingleType($that->locals) &&
+                $this->return->triviallyContainsVarState($that->return);
+        }
+
+        public function union(self $that):self {
+            $self = clone $this;
+
+            $self->return = $self->return->unionVarState($that->return);
+            $self->locals = $self->locals->unionArray($that->locals);
+
+            return $self;
         }
     }
 
-    class TypeAssignments {
+    class TypedStmt implements StateReceiver {
+        /** @var string */
+        private $prefix;
+        /** @var Stmt\Stmt */
+        private $stmt;
+        /** @var StmtTypes */
+        private $types;
+        /** @var Jumps */
+        private $jumps;
 
+        public function __construct(
+            string $prefix,
+            Stmt\Stmt $stmt,
+            StmtTypes $types,
+            Jumps $jumps
+        ) {
+            $this->prefix = $prefix;
+            $this->stmt   = $stmt;
+            $this->types  = $types;
+            $this->jumps  = $jumps;
+        }
+
+        public function pushState(ProgramState $state) {
+            $key = $this->key();
+            if ($this->types->add($key, $state)) {
+                $this->stmt->threadState($this);
+            }
+        }
+
+        public function state():ProgramState {
+            return $this->types->get($this->key());
+        }
+
+        private function key():string {
+            return $this->prefix . '#' . $this->stmt->id();
+        }
+
+        public function sub() {
+
+        }
+    }
+
+    class StmtTypes extends Node\Node {
+        /** @var ProgramState[] */
+        private $states = [];
+
+        public function get(string $key):ProgramState {
+            if (isset($this->states[$key])) {
+                return $this->states[$key];
+            } else {
+                return new ProgramState($this->loc());
+            }
+        }
+
+        public function add(string $key, ProgramState $state):bool {
+            $existing = $this->get($key);
+            if ($existing->contains($state)) {
+                return false;
+            } else {
+                $this->states[$key] = $existing->union($state);
+                return true;
+            }
+        }
+    }
+
+    class Jumps {
+        /** @var StateReceiver */
+        public $next;
+        /** @var StateReceiver */
+        public $return;
+        /** @var StateReceiver */
+        public $throw;
+        /** @var StateReceiver[] */
+        public $break = [];
+        /** @var StateReceiver[] */
+        public $continue = [];
+        /** @var StateReceiver[] */
+        public $goto = [];
+
+        public function __construct() {
+            $this->next   = new NullStateReceiver();
+            $this->return = new NullStateReceiver();
+            $this->throw  = new NullStateReceiver();
+        }
+
+        public function withNext(StateReceiver $receiver) {
+            $self       = clone $this;
+            $self->next = $receiver;
+            return $self;
+        }
+
+        public function withReturn(StateReceiver $receiver) {
+            $self         = clone $this;
+            $self->return = $receiver;
+            return $self;
+        }
+
+        public function withThrow(StateReceiver $receiver) {
+            $self        = clone $this;
+            $self->throw = $receiver;
+            return $self;
+        }
+
+        public function withBreak(StateReceiver $receiver) {
+            $self = clone $this;
+            array_unshift($self->break, $receiver);
+            return $self;
+        }
+
+        public function withContinue(StateReceiver $receiver) {
+            $self = clone $this;
+            array_unshift($self->continue, $receiver);
+            return $self;
+        }
+
+        public function withGoto($label, StateReceiver $receiver) {
+            $self               = clone $this;
+            $self->goto[$label] = $receiver;
+            return $self;
+        }
+    }
+
+    interface StateReceiver {
+        public function pushState(ProgramState $state);
+    }
+
+    class NullStateReceiver implements StateReceiver {
+        public function pushState(ProgramState $state) {
+        }
     }
 }
