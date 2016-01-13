@@ -238,18 +238,22 @@ namespace JesseSchalken\PhpTypeChecker\Parser {
         }
     }
 
+    function normalize_constant(string $name):string {
+        // $name is the name of the constant including the namespace.
+        // Namespaces are case insensitive, but constants are case sensitive,
+        // therefore split the name after the last "\" and strtolower() the left side.
+        $pos = strrpos($name, '\\');
+        $pos = $pos === false ? 0 : $pos + 1;
+
+        $prefix   = substr($name, 0, $pos);
+        $constant = substr($name, $pos);
+
+        return strtolower($prefix) . $constant;
+    }
+
     class DefinedNamesConstants extends DefinedNames {
         protected function normalize(string $name):string {
-            // $name is the name of the constant including the namespace.
-            // Namespaces are case insensitive, but constants are case sensitive,
-            // therefire split the name after the last "\" and strtolower() the left side.
-            $pos = strrpos($name, '\\');
-            $pos = $pos === false ? 0 : $pos + 1;
-
-            $prefix   = substr($name, 0, $pos);
-            $constant = substr($name, $pos);
-
-            return strtolower($prefix) . $constant;
+            return normalize_constant($name);
         }
     }
 
@@ -4824,23 +4828,138 @@ namespace JesseSchalken\PhpTypeChecker\Node\Type {
         }
     }
 
-    class Function_ {
+    class Function_ extends Node\Node {
         /** @var Type */
         private $returnType;
         /** @var bool */
         private $returnRef;
         /** @var Param[] */
         private $params = [];
+        /** @var bool */
+        private $variadic;
 
         /**
+         * @param CodeLoc $loc
          * @param Param[] $params
          * @param Type    $returnType
          * @param bool    $returnRef
+         * @param bool    $variadic
          */
-        public function __construct(array $params, Type $returnType, bool $returnRef) {
+        public function __construct(CodeLoc $loc, array $params, Type $returnType, bool $returnRef, bool $variadic) {
+            parent::__construct($loc);
             $this->returnType = $returnType;
             $this->returnRef  = $returnRef;
             $this->params     = $params;
+            $this->variadic   = $variadic;
+        }
+
+        public function toString():string {
+            $params = [];
+            foreach ($this->params as $i => $param) {
+                $params[] = $param->toString();
+            }
+            return
+                ($this->returnRef ? '&' : '') .
+                '(' . join(', ', $params) . ($this->variadic ? ' ...' : '') . ')' .
+                ':' . $this->returnType->toString();
+        }
+
+        public function contains(Function_ $that):bool {
+            if (!$this->returnContains($that)) {
+                return false;
+            }
+
+            $len = max(
+                count($this->params),
+                count($that->params)
+            );
+
+            for ($i = 0; $i < $len; $i++) {
+                if (!$this->paramContains($i, $that)) {
+                    return false;
+                }
+            }
+
+            // Handle a variadic parameter
+            if ($this->variadic || $that->variadic) {
+                // Not sure what to do besides this. Should do the trick.
+                if (!$this->paramContains(9999, $that)) {
+                    return false;
+                }
+            }
+
+            return true;
+        }
+
+        private function returnContains(self $that):bool {
+            if ($this->returnRef != $that->returnRef) {
+                // The functions must agree whether to return a reference or not
+                // [Dubious. Unlike by-ref parameters, by-ref returns don't have an effect on the called environment.]
+                return false;
+            }
+            if (!$this->returnType->triviallyContainsType($that->returnType)) {
+                return false;
+            }
+            return true;
+        }
+
+        private function paramContains(int $i, self $that):bool {
+            if ($this->acceptsParam($i) && !$that->acceptsParam($i)) {
+                // The function must be prepared to accept at least as many parameters as us
+                // [Dubious. Why shouldn't an overridden function be allowed to ignore some parameters?]
+                return false;
+            }
+            if ($this->isParamOptional($i) && !$that->isParamOptional($i)) {
+                // An optional parameter cannot be made required
+                return false;
+            }
+            if ($this->isParamRef($i) != $that->isParamRef($i)) {
+                // A by-ref parameter cannot be made by-val or vice versa, because by-ref params have an
+                // effect on the calling environment (they cause the variable to be assigned null).
+                return false;
+            }
+            if (!$that->paramType($i)->triviallyContainsType($this->paramType($i))) {
+                return false;
+            }
+            return true;
+        }
+
+        public function acceptsParam(int $i):bool {
+            return $this->variadic || isset($this->params[$i]);
+        }
+
+        public function isParamOptional(int $i):bool {
+            if ($this->variadic && $i == count($this->params) - 1) {
+                // The last parameter is always optional if this function is variadic
+                return true;
+            } else if (isset($this->params[$i])) {
+                return $this->params[$i]->isOptional();
+            } else {
+                // Any superfluous parameters are optional
+                return true;
+            }
+        }
+
+        public function paramType(int $i):Type {
+            if (isset($this->params[$i])) {
+                return $this->params[$i]->type();
+            } else if ($this->variadic && $this->params) {
+                return $this->params[count($this->params) - 1]->type();
+            } else {
+                // Any superfluous parameters accept nothing
+                return Type::none($this->loc());
+            }
+        }
+
+        public function isParamRef(int $i):bool {
+            if (isset($this->params[$i])) {
+                return $this->params[$i]->isRef();
+            } else if ($this->variadic && $this->params) {
+                return $this->params[count($this->params) - 1]->isRef();
+            } else {
+                // Any superfluous parameters are not passed by reference
+                return false;
+            }
         }
     }
 
@@ -4851,14 +4970,30 @@ namespace JesseSchalken\PhpTypeChecker\Node\Type {
         private $ref;
         /** @var bool */
         private $optional;
-        /** @var bool */
-        private $splat;
 
-        public function __construct(Type $type, bool $ref, bool $optional, bool $splat) {
+        public function __construct(Type $type, bool $ref, bool $optional) {
             $this->type     = $type;
             $this->ref      = $ref;
             $this->optional = $optional;
-            $this->splat    = $splat;
+        }
+
+        public function isOptional():bool {
+            return $this->optional;
+        }
+
+        public function isRef():bool {
+            return $this->ref;
+        }
+
+        public function type():Type {
+            return $this->type;
+        }
+
+        public function toString():string {
+            return
+                $this->type->toString() . ' ' .
+                ($this->ref ? '&' : '') .
+                ($this->optional ? '?' : '');
         }
     }
 }
@@ -4866,6 +5001,15 @@ namespace JesseSchalken\PhpTypeChecker\Node\Type {
 namespace JesseSchalken\PhpTypeChecker\Definitions {
 
     use JesseSchalken\PhpTypeChecker\Node\Type;
+    use function JesseSchalken\PhpTypeChecker\Parser\normalize_constant;
+
+    function str_eq(string $a, string $b):bool {
+        return strcmp($a, $b) == 0;
+    }
+
+    function str_ieq(string $a, string $b):bool {
+        return strcasecmp($a, $b) == 0;
+    }
 
     class Definitions {
         /** @var Type\Type[] */
@@ -4876,9 +5020,80 @@ namespace JesseSchalken\PhpTypeChecker\Definitions {
         private $functions = [];
         /** @var Type\Type */
         private $constants = [];
+
+        public function addGlobal(string $name, Type\Type $type) {
+            $this->globals[$name] = $type;
+        }
+
+        public function addClass(ClassLike $class) {
+            $this->classes[strtolower($class->name())] = $class;
+        }
+
+        public function addFunction(Function_ $function) {
+            $this->functions[strtolower($function->name())] = $function;
+        }
+
+        public function addConstant(string $name, Type\Type $type) {
+            $this->constants[normalize_constant($name)] = $type;
+        }
+
+        public function hasGlobal(string $name):bool {
+            return isset($this->globals[$name]);
+        }
+
+        public function hasClass(string $name):bool {
+            return isset($this->classes[strtolower($name)]);
+        }
+
+        public function hasFunction(string $name):bool {
+            return isset($this->functions[strtolower($name)]);
+        }
+
+        public function hasConstnat(string $name):bool {
+            return isset($this->constants[normalize_constant($name)]);
+        }
+
+        public function getClass(string $name):ClassLike {
+            return $this->classes[strtolower($name)];
+        }
+
+        public function isCompatible(string $sub, string $sup):bool {
+            if (str_ieq($sub, $sup)) {
+                return true;
+            }
+
+            if (!$this->hasClass($sub)) {
+                return false;
+            }
+
+            foreach ($this->getClass($sub)->parents() as $parent) {
+                if ($this->isCompatible($parent, $sup)) {
+                    return true;
+                }
+            }
+
+            return false;
+        }
     }
 
-    class ClassLike {
+    abstract class ClassLike {
+        /** @var string */
+        private $name;
+
+        public function __construct(string $name) {
+            $this->name = $name;
+        }
+
+        public final function name():string {
+            return $this->name;
+        }
+
+        /** @return string[] */
+        public abstract function parents():array;
+
+        public abstract function hasMethod(string $name):bool;
+
+        public abstract function getMethod(string $name):Method;
     }
 
     class Class_ extends ClassLike {
@@ -4892,11 +5107,39 @@ namespace JesseSchalken\PhpTypeChecker\Definitions {
         private $extends = [];
         /** @var string[] */
         private $implements = [];
+
+        /** @return string[] */
+        public function parents():array {
+            return array_merge($this->extends, $this->implements);
+        }
+
+        public function hasMethod(string $name):bool {
+            return isset($this->methods[strtolower($name)]);
+        }
+
+        public function getMethod(string $name):Method {
+            return $this->methods[strtolower($name)];
+        }
     }
 
     class Interface_ extends ClassLike {
         /** @var Method[] */
         private $methods;
+        /** @var string[] */
+        private $extends;
+
+        /** @return string[] */
+        public function parents():array {
+            return $this->extends;
+        }
+
+        public function hasMethod(string $name):bool {
+            return isset($this->methods[strtolower($name)]);
+        }
+
+        public function getMethod(string $name):Method {
+            return $this->methods[strtolower($name)];
+        }
     }
 
     class Function_ {
@@ -4904,6 +5147,10 @@ namespace JesseSchalken\PhpTypeChecker\Definitions {
         private $name;
         /** @var Type\Function_ */
         private $type;
+
+        public function name():string {
+            return $this->name;
+        }
     }
 
     class Method {
