@@ -5000,6 +5000,8 @@ namespace JesseSchalken\PhpTypeChecker\Node\Type {
 
 namespace JesseSchalken\PhpTypeChecker\Definitions {
 
+    use JesseSchalken\PhpTypeChecker\Node\CodeLoc;
+    use JesseSchalken\PhpTypeChecker\Node\Node;
     use JesseSchalken\PhpTypeChecker\Node\Type;
     use function JesseSchalken\PhpTypeChecker\Parser\normalize_constant;
 
@@ -5009,6 +5011,12 @@ namespace JesseSchalken\PhpTypeChecker\Definitions {
 
     function str_ieq(string $a, string $b):bool {
         return strcasecmp($a, $b) == 0;
+    }
+
+    class YesNoMaybe {
+        const YES   = 1;
+        const NO    = -1;
+        const MAYBE = 0;
     }
 
     class Definitions {
@@ -5057,35 +5065,105 @@ namespace JesseSchalken\PhpTypeChecker\Definitions {
             return $this->classes[strtolower($name)];
         }
 
-        public function isCompatible(string $sub, string $sup):bool {
-            if (str_ieq($sub, $sup)) {
-                return true;
-            }
+        public function hasProperty(string $class, string $property, string $context, bool $static):bool {
+            return $this->getPropertyType($class, $property, $context, $static) !== null;
+        }
 
-            if (!$this->hasClass($sub)) {
+        /**
+         * @param string $class
+         * @param string $property
+         * @param string $context
+         * @param bool   $static
+         * @return Type\Type|null
+         */
+        public function getPropertyType(string $class, string $property, string $context, bool $static) {
+            if (!$this->hasClass($class)) {
                 return false;
             }
 
-            foreach ($this->getClass($sub)->parents() as $parent) {
-                if ($this->isCompatible($parent, $sup)) {
-                    return true;
+            $class = $this->getClass($class);
+            if ($class->hasProperty($property)) {
+                $prop = $class->getProperty($property);
+                switch ($prop->getVisibility()) {
+                    case 'public':
+                        break;
+                    case 'protected':
+                        if ($this->isCompatible($context, $class) != YesNoMaybe::YES) {
+                            return null;
+                        }
+                        break;
+                    case 'private':
+                        if (!str_ieq($class->name(), $context)) {
+                            return null;
+                        }
+                        break;
+                }
+                if ($prop->isStatic() != $static) {
+                    return null;
+                }
+                return $prop->getType();
+            } else {
+                foreach ($class->parents() as $parent) {
+                    if ($type = $this->getPropertyType($parent, $property, $context, $static)) {
+                        return $type;
+                    }
+                }
+                return null;
+            }
+        }
+
+        public function isCompatible(string $sub, string $sup):int {
+            if (str_ieq($sub, $sup)) {
+                return YesNoMaybe::YES;
+            }
+
+            if (!$this->hasClass($sub)) {
+                return YesNoMaybe::NO;
+            }
+
+            $class = $this->getClass($sub);
+
+            foreach ($class->parents() as $parent) {
+                if ($this->isCompatible($parent, $sup) === YesNoMaybe::YES) {
+                    return YesNoMaybe::YES;
                 }
             }
 
-            return false;
+            if ($class->isFinal()) {
+                return YesNoMaybe::NO;
+            } else {
+                return YesNoMaybe::MAYBE;
+            }
         }
     }
 
-    abstract class ClassLike {
+    abstract class ClassLike extends Node {
         /** @var string */
         private $name;
 
-        public function __construct(string $name) {
+        public function __construct(CodeLoc $loc, string $name) {
+            parent::__construct($loc);
             $this->name = $name;
         }
 
         public final function name():string {
             return $this->name;
+        }
+
+        public function isAbstract():bool {
+            return true;
+        }
+
+        public function isFinal():bool {
+            return false;
+        }
+
+        public function hasConstant(string $name):bool {
+            return false;
+        }
+
+        public function getConstant(string $name):Type\Type {
+            return Type\Type::mixed($this->loc());
         }
 
         /** @return string[] */
@@ -5094,6 +5172,12 @@ namespace JesseSchalken\PhpTypeChecker\Definitions {
         public abstract function hasMethod(string $name):bool;
 
         public abstract function getMethod(string $name):Method;
+
+        public function hasProperty(string $name):bool {
+            return false;
+        }
+
+        public abstract function getProperty(string $name):Property;
     }
 
     class Class_ extends ClassLike {
@@ -5107,6 +5191,26 @@ namespace JesseSchalken\PhpTypeChecker\Definitions {
         private $extends = [];
         /** @var string[] */
         private $implements = [];
+        /** @var bool */
+        private $abstract;
+        /** @var bool */
+        private $final;
+
+        public function hasConstant(string $name):bool {
+            return isset($this->constants[$name]);
+        }
+
+        public function getConstant(string $name):Type\Type {
+            return $this->constants[$name];
+        }
+
+        public function isAbstract():bool {
+            return $this->abstract;
+        }
+
+        public function isFinal():bool {
+            return $this->final;
+        }
 
         /** @return string[] */
         public function parents():array {
@@ -5119,6 +5223,10 @@ namespace JesseSchalken\PhpTypeChecker\Definitions {
 
         public function getMethod(string $name):Method {
             return $this->methods[strtolower($name)];
+        }
+
+        public function getProperty(string $name):Property {
+            return $this->properties[$name];
         }
     }
 
@@ -5139,6 +5247,10 @@ namespace JesseSchalken\PhpTypeChecker\Definitions {
 
         public function getMethod(string $name):Method {
             return $this->methods[strtolower($name)];
+        }
+
+        public function getProperty(string $name):Property {
+            throw new \Exception('Interfaces don\'t have properties');
         }
     }
 
@@ -5177,5 +5289,17 @@ namespace JesseSchalken\PhpTypeChecker\Definitions {
         private $type;
         /** @var bool */
         private $static;
+
+        public function getVisibility():string {
+            return $this->visibility;
+        }
+
+        public function isStatic():bool {
+            return $this->static;
+        }
+
+        public function getType():Type\Type {
+            return $this->type;
+        }
     }
 }
