@@ -90,7 +90,55 @@ namespace JesseSchalken\PhpTypeChecker\Node {
         }
 
         public function unparse():string {
-            $prettyPrinter = new \PhpParser\PrettyPrinter\Standard();
+            /** @var \PhpParser\PrettyPrinter\Standard $prettyPrinter */
+            $prettyPrinter = new class() extends \PhpParser\PrettyPrinter\Standard {
+                public function pStmt_Interface(\PhpParser\Node\Stmt\Interface_ $node) {
+                    return 'interface ' . $node->name
+                    . (!empty($node->extends) ? ' extends ' . $this->pCommaSeparated($node->extends) : '')
+                    . ' {' . $this->pStmts($node->stmts) . "\n" . '}';
+                }
+
+                public function pStmt_Function(\PhpParser\Node\Stmt\Function_ $node) {
+                    return 'function ' . ($node->byRef ? '&' : '') . $node->name
+                    . '(' . $this->pCommaSeparated($node->params) . ')'
+                    . (null !== $node->returnType ? ' : ' . $this->pType($node->returnType) : '')
+                    . ' {' . $this->pStmts($node->stmts) . "\n" . '}';
+                }
+
+                public function pStmt_Trait(\PhpParser\Node\Stmt\Trait_ $node) {
+                    return 'trait ' . $node->name
+                    . ' {' . $this->pStmts($node->stmts) . "\n" . '}';
+                }
+
+                protected function pClassCommon(\PhpParser\Node\Stmt\Class_ $node, $afterClassToken) {
+                    return $this->pModifiers($node->type)
+                    . 'class' . $afterClassToken
+                    . (null !== $node->extends ? ' extends ' . $this->p($node->extends) : '')
+                    . (!empty($node->implements) ? ' implements ' . $this->pCommaSeparated($node->implements) : '')
+                    . ' {' . $this->pStmts($node->stmts) . "\n" . '}';
+                }
+
+                public function pStmt_ClassMethod(\PhpParser\Node\Stmt\ClassMethod $node) {
+                    return $this->pModifiers($node->type)
+                    . 'function ' . ($node->byRef ? '&' : '') . $node->name
+                    . '(' . $this->pCommaSeparated($node->params) . ')'
+                    . (null !== $node->returnType ? ' : ' . $this->pType($node->returnType) : '')
+                    . (null !== $node->stmts
+                        ? ' {' . $this->pStmts($node->stmts) . "\n" . '}'
+                        : ';');
+                }
+
+                public function pExpr_Array(\PhpParser\Node\Expr\Array_ $node) {
+                    $items = $node->items ? "\n" . $this->pImplode($node->items, ",\n") . ',' : '';
+                    $items = preg_replace('~\n(?!$|' . $this->noIndentToken . ')~', "\n    ", $items);
+
+                    if ($this->options['shortArraySyntax']) {
+                        return $items ? "[$items\n]" : "[]";
+                    } else {
+                        return $items ? "array($items\n)" : "array()";
+                    }
+                }
+            };
             $parserNodes   = $this->contents->unparseWithNamespaces();
             return $this->shebang . $prettyPrinter->prettyPrintFile($parserNodes);
         }
