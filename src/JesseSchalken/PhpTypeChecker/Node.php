@@ -90,7 +90,9 @@ namespace JesseSchalken\PhpTypeChecker\Node {
         }
 
         public function unparse():string {
-            return $this->shebang . (new \PhpParser\PrettyPrinter\Standard())->prettyPrintFile($this->contents->unparseWithNamespaces());
+            $prettyPrinter = new \PhpParser\PrettyPrinter\Standard();
+            $parserNodes   = $this->contents->unparseWithNamespaces();
+            return $this->shebang . $prettyPrinter->prettyPrintFile($parserNodes);
         }
     }
 }
@@ -436,10 +438,10 @@ namespace JesseSchalken\PhpTypeChecker\Parser {
         private $errors;
 
         public function __construct(ParsedFile $file, GlobalDefinedNames $globals, ErrorReceiver $errors) {
-            $this->globals     = $globals;
-            $this->locals      = new DefinedNamesCaseSensitive();
-            $this->file        = $file;
-            $this->errors      = $errors;
+            $this->globals = $globals;
+            $this->locals  = new DefinedNamesCaseSensitive();
+            $this->file    = $file;
+            $this->errors  = $errors;
             $this->resetNamespace();
         }
 
@@ -512,11 +514,38 @@ namespace JesseSchalken\PhpTypeChecker\Parser {
         public function parseStmts(CodeLoc $loc, array $nodes):Stmt\Block {
             $stmts = new Stmt\Block($loc);
             foreach ($nodes as $node) {
+                $this->parseVariableDocBlocks($node, $stmts);
+
                 foreach ($this->parseStmt($node)->split() as $stmt) {
                     $stmts->add($stmt);
                 }
             }
             return $stmts;
+        }
+
+        private function parseVariableDocBlocks(\PhpParser\Node $node, Stmt\Block $block) {
+            foreach ($node->getAttribute('comments', []) as $comment) {
+                if ($comment instanceof \PhpParser\Comment\Doc) {
+                    $docBlock = $this->parseDocBlock($comment);
+                    $codeLoc  = $this->locateComment($docBlock);
+                    foreach ($docBlock->getTags() as $tag) {
+                        if ($tag instanceof \phpDocumentor\Reflection\DocBlock\Tag\VarTag) {
+                            $name = substr($tag->getVariableName(), 1);
+                            $type = $this->parseDocType($codeLoc, $tag->getType(), $docBlock->getContext())
+                                ?: Type\Type::none($codeLoc);
+                            switch ($tag->getName()) {
+                                case 'var':
+                                    $block->add(new Stmt\LocalVariableType($codeLoc, $name, $type));
+                                    break;
+                                case 'global':
+                                case 'xglobal':
+                                    $block->add(new Stmt\GlobalVariableType($codeLoc, $name, $type));
+                                    break;
+                            }
+                        }
+                    }
+                }
+            }
         }
 
         private function parseStmt(\PhpParser\Node $node):Stmt\Stmt {
@@ -744,12 +773,15 @@ namespace JesseSchalken\PhpTypeChecker\Parser {
                     $visibility = $this->parseVisibility($stmt->type);
                     $static     = $stmt->type & \PhpParser\Node\Stmt\Class_::MODIFIER_STATIC;
                     foreach ($stmt->props as $prop) {
-                        $comment = $this->parseDocBlock($prop->getDocComment() ?: $stmt->getDocComment());
-                        $type    = null;
-                        if ($comment) {
+                        $type = null;
+                        if ($comment = $this->parseDocBlockOrNull($prop->getDocComment() ?: $stmt->getDocComment())) {
                             /** @var \phpDocumentor\Reflection\DocBlock\Tag\VarTag $tag */
                             foreach ($comment->getTagsByName('var') as $tag) {
-                                $type = $type ?: $this->parseDocType($this->locateComment($comment), $tag->getType(), $comment->getContext());
+                                $type = $type ?: $this->parseDocType(
+                                    $this->locateComment($comment),
+                                    $tag->getType(),
+                                    $comment->getContext()
+                                );
                             }
                         }
                         $stmts[] = new Stmt\Property(
@@ -773,20 +805,26 @@ namespace JesseSchalken\PhpTypeChecker\Parser {
                             foreach ($adaption->insteadof as $name) {
                                 $insteadOf[] = $this->resolveClass($name)->toString();
                             }
-                            $useTrait->addInsteadOf(new Stmt\UseTraitInsteadof(
-                                $this->locateNode($adaption),
-                                $this->resolveClass($adaption->trait)->toString(),
-                                $adaption->method,
-                                $insteadOf
-                            ));
+                            $useTrait->addInsteadOf(
+                                new Stmt\UseTraitInsteadof(
+                                    $this->locateNode($adaption),
+                                    $this->resolveClass($adaption->trait)->toString(),
+                                    $adaption->method,
+                                    $insteadOf
+                                )
+                            );
                         } elseif ($adaption instanceof \PhpParser\Node\Stmt\TraitUseAdaptation\Alias) {
-                            $useTrait->addAlias(new Stmt\UseTraitAlias(
-                                $this->locateNode($adaption),
-                                $adaption->newName !== null ? $adaption->newName : $adaption->method,
-                                $adaption->method,
-                                $adaption->trait ? $this->resolveClass($adaption->trait)->toString() : null,
-                                $adaption->newModifier !== null ? $this->parseVisibility($adaption->newModifier) : null
-                            ));
+                            $useTrait->addAlias(
+                                new Stmt\UseTraitAlias(
+                                    $this->locateNode($adaption),
+                                    $adaption->newName !== null ? $adaption->newName : $adaption->method,
+                                    $adaption->method,
+                                    $adaption->trait ? $this->resolveClass($adaption->trait)->toString() : null,
+                                    $adaption->newModifier !== null
+                                        ? $this->parseVisibility($adaption->newModifier)
+                                        : null
+                                )
+                            );
                         } else {
                             throw new \Exception('Unhandled type of trait adaption: ' . get_class($adaption));
                         }
@@ -815,11 +853,11 @@ namespace JesseSchalken\PhpTypeChecker\Parser {
          * @param \PhpParser\Comment\Doc|null $comment
          * @return null|\phpDocumentor\Reflection\DocBlock
          */
-        private function parseDocBlock(\PhpParser\Comment\Doc $comment = null) {
-            if (!$comment) {
-                return null;
-            }
+        private function parseDocBlockOrNull(\PhpParser\Comment\Doc $comment = null) {
+            return $comment ? $this->parseDocBlock($comment) : null;
+        }
 
+        private function parseDocBlock(\PhpParser\Comment\Doc $comment):\phpDocumentor\Reflection\DocBlock {
             return new \phpDocumentor\Reflection\DocBlock(
                 $comment->getText(),
                 $this->getDocBlockContext(),
@@ -943,7 +981,7 @@ namespace JesseSchalken\PhpTypeChecker\Parser {
              */
 
             // First, get all the types from the type hints
-            $paramTypes = [];
+            $paramTypes    = [];
             $paramDefaults = [];
             foreach ($node->getParams() as $param) {
                 $name    = $param->name;
@@ -964,7 +1002,7 @@ namespace JesseSchalken\PhpTypeChecker\Parser {
 
             // If we have a doc comment, overwrite the types from the type hints with those
             // from the doc comment, but make sure they are trivially compatible.
-            if ($comment = $this->parseDocBlock($node->getDocComment())) {
+            if ($comment = $this->parseDocBlockOrNull($node->getDocComment())) {
                 /** @var \phpDocumentor\Reflection\DocBlock\Tag\ReturnTag $tag */
                 foreach ($comment->getTagsByName('return') as $tag) {
                     if ($type = $this->parseDocType(
@@ -1593,7 +1631,7 @@ namespace JesseSchalken\PhpTypeChecker\Node\Stmt {
         }
     }
 
-    final class Block extends Stmt {
+    class Block extends Stmt {
         /** @var SingleStmt[] */
         private $stmts;
 
@@ -1625,24 +1663,24 @@ namespace JesseSchalken\PhpTypeChecker\Node\Stmt {
                 $stmtNode      = $stmt->unparseStmt();
                 $stmtNamespace = $namespaces ? $namespaces[0] : null;
 
-                if (
-                    $currentNamespace === null ||
-                    $stmtNamespace === null ||
-                    $stmtNamespace === $currentNamespace ||
-                    !$currentNodes
-                ) {
-                    $currentNamespace = $stmtNamespace;
-                    if ($stmtNode) {
+                if ($stmtNode) {
+                    if ($stmtNamespace === null) {
                         $currentNodes[] = $stmtNode;
-                    }
-                } else {
-                    $nodes[] = new \PhpParser\Node\Stmt\Namespace_(
-                        $currentNamespace ? new \PhpParser\Node\Name($currentNamespace) : null,
-                        $currentNodes
-                    );
+                    } else if (
+                        $currentNamespace !== null &&
+                        $stmtNamespace !== $currentNamespace
+                    ) {
+                        $nodes[] = new \PhpParser\Node\Stmt\Namespace_(
+                            $currentNamespace ? new \PhpParser\Node\Name($currentNamespace) : null,
+                            $currentNodes
+                        );
 
-                    $currentNamespace = null;
-                    $currentNodes     = [];
+                        $currentNamespace = $stmtNamespace;
+                        $currentNodes     = [$stmtNode];
+                    } else {
+                        $currentNamespace = $stmtNamespace;
+                        $currentNodes[]   = $stmtNode;
+                    }
                 }
             }
 
@@ -1719,6 +1757,33 @@ namespace JesseSchalken\PhpTypeChecker\Node\Stmt {
             $decls[] = $this;
             return $decls;
         }
+    }
+
+    abstract class VariableType extends SingleStmt {
+        /** @var string */
+        private $name;
+        /** @var Type\Type */
+        private $type;
+
+        public function __construct(CodeLoc $loc, string $name, Type\Type $type) {
+            parent::__construct($loc);
+            $this->name = $name;
+            $this->type = $type;
+        }
+
+        public function subStmts():array {
+            return [];
+        }
+
+        public function unparseStmt() {
+            return null;
+        }
+    }
+
+    class GlobalVariableType extends VariableType {
+    }
+
+    class LocalVariableType extends VariableType {
     }
 
     class DoWhile extends ControlStructure {
@@ -2463,12 +2528,12 @@ namespace JesseSchalken\PhpTypeChecker\Node\Stmt {
         private $type;
 
         /**
-         * @param CodeLoc $loc
-         * @param string $name
+         * @param CodeLoc        $loc
+         * @param string         $name
          * @param Expr\Expr|null $default
-         * @param bool $passByRef
-         * @param bool $variadic
-         * @param Type\Type $type
+         * @param bool           $passByRef
+         * @param bool           $variadic
+         * @param Type\Type      $type
          */
         public function __construct(
             CodeLoc $loc,
@@ -3756,7 +3821,13 @@ namespace JesseSchalken\PhpTypeChecker\Node\Expr {
          * @param ClosureUse[]           $uses
          * @param Stmt\Block             $body
          */
-        public function __construct(CodeLoc $loc, bool $static, Stmt\FunctionSignature $type, array $uses, Stmt\Block $body) {
+        public function __construct(
+            CodeLoc $loc,
+            bool $static,
+            Stmt\FunctionSignature $type,
+            array $uses,
+            Stmt\Block $body
+        ) {
             parent::__construct($loc);
             $this->static = $static;
             $this->type   = $type;
@@ -4255,7 +4326,10 @@ namespace JesseSchalken\PhpTypeChecker\Node\Expr {
         }
 
         public function unparseExpr():\PhpParser\Node\Expr {
-            return new \PhpParser\Node\Expr\ClassConstFetch(new \PhpParser\Node\Name\FullyQualified($this->class), 'class');
+            return new \PhpParser\Node\Expr\ClassConstFetch(
+                new \PhpParser\Node\Name\FullyQualified($this->class),
+                'class'
+            );
         }
 
         public function unparseExprOrName() {
@@ -4301,8 +4375,14 @@ namespace JesseSchalken\PhpTypeChecker\Node\Type {
     use JesseSchalken\PhpTypeChecker\Node;
     use JesseSchalken\PhpTypeChecker\Node\CodeLoc;
 
-    \phpDocumentor\Reflection\DocBlock\Tag::registerTagHandler('global', \phpDocumentor\Reflection\DocBlock\Tag\VarTag::class);
-    \phpDocumentor\Reflection\DocBlock\Tag::registerTagHandler('xglobal', \phpDocumentor\Reflection\DocBlock\Tag\VarTag::class);
+    \phpDocumentor\Reflection\DocBlock\Tag::registerTagHandler(
+        'global',
+        \phpDocumentor\Reflection\DocBlock\Tag\VarTag::class
+    );
+    \phpDocumentor\Reflection\DocBlock\Tag::registerTagHandler(
+        'xglobal',
+        \phpDocumentor\Reflection\DocBlock\Tag\VarTag::class
+    );
 
     abstract class AbstractType extends Node\Node {
         /**
