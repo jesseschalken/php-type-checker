@@ -3,6 +3,7 @@
 
 namespace JesseSchalken\PhpTypeChecker {
 
+    use JesseSchalken\PhpTypeChecker\Node\CodeLoc;
     use JesseSchalken\PhpTypeChecker\Node\ErrorReceiver;
     use JesseSchalken\PhpTypeChecker\Node\File;
 
@@ -56,7 +57,15 @@ s
         }
         $files = array_unique($files);
         sort($files, SORT_STRING);
-        $files = File::parse($files, new ErrorReceiver());
+        $contents = array();
+        foreach ($files as $path) {
+            $contents[$path] = file_get_contents($path);
+        }
+        $files = File::parse($contents, new class() extends ErrorReceiver {
+            public function add(string $message, CodeLoc $loc) {
+                print $loc->format($message);
+            }
+        });
         if ($output) {
             foreach ($files as $file) {
                 $path = $file->path();

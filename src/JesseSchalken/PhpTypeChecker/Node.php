@@ -1,7 +1,35 @@
 <?php
 
+namespace JesseSchalken\PhpTypeChecker {
+
+    use JesseSchalken\PhpTypeChecker\Node\CodeLoc;
+
+    /**
+     * @param string[] $phpFiles
+     * @return string[]
+     */
+    function type_check(array $phpFiles):array {
+        $errors = new class () extends Node\ErrorReceiver {
+            public $errors = array();
+            public function add(string $message, CodeLoc $loc) {
+                $this->errors[] = $loc->format($message);
+            }
+        };
+        $files = Node\File::parse($phpFiles, $errors);
+        $defns = new Definitions\Definitions();
+        foreach ($files as $file) {
+            $file->gatherDefinitions($defns);
+        }
+        foreach ($files as $file) {
+            $file->typeCheck($defns, $errors);
+        }
+        return $errors->errors;
+    }
+}
+
 namespace JesseSchalken\PhpTypeChecker\Node {
 
+    use JesseSchalken\PhpTypeChecker\Definitions\Definitions;
     use JesseSchalken\PhpTypeChecker\Node\Expr;
     use JesseSchalken\PhpTypeChecker\Node\Stmt;
     use JesseSchalken\PhpTypeChecker\Node\Type;
@@ -30,10 +58,8 @@ namespace JesseSchalken\PhpTypeChecker\Node {
         }
     }
 
-    class ErrorReceiver {
-        public function add(string $message, CodeLoc $loc) {
-            print $loc->format($message);
-        }
+    abstract class ErrorReceiver {
+        public abstract function add(string $message, CodeLoc $loc);
     }
 
     abstract class Node {
@@ -51,11 +77,11 @@ namespace JesseSchalken\PhpTypeChecker\Node {
 
     class File extends Node {
         /**
-         * @param string[]      $paths
+         * @param string[]      $files
          * @param ErrorReceiver $errors
          * @return File[]
          */
-        public static function parse(array $paths, ErrorReceiver $errors):array {
+        public static function parse(array $files, ErrorReceiver $errors):array {
             /**
              * @var Parser\ParsedFile[] $parsed
              * @var self[]              $result
@@ -63,8 +89,8 @@ namespace JesseSchalken\PhpTypeChecker\Node {
             $parsed  = [];
             $defined = new Parser\GlobalDefinedNames;
             $result  = [];
-            foreach ($paths as $path) {
-                $file = new Parser\ParsedFile($path, $errors);
+            foreach ($files as $path => $contents) {
+                $file = new Parser\ParsedFile($path, $contents, $errors);
                 $defined->addNodes($file->nodes);
                 $parsed[] = $file;
             }
@@ -141,6 +167,21 @@ namespace JesseSchalken\PhpTypeChecker\Node {
             };
             $parserNodes   = $this->contents->unparseWithNamespaces();
             return $this->shebang . $prettyPrinter->prettyPrintFile($parserNodes);
+        }
+
+        /**
+         * @param Definitions   $defns
+         * @return void
+         */
+        public function gatherDefinitions(Definitions $defns) {
+        }
+
+        /**
+         * @param Definitions   $defns
+         * @param ErrorReceiver $errors
+         * @return void
+         */
+        public function typeCheck(Definitions $defns, ErrorReceiver $errors) {
         }
     }
 }
@@ -392,9 +433,9 @@ namespace JesseSchalken\PhpTypeChecker\Parser {
         /** @var int */
         public $lineOffset = 0;
 
-        public function __construct(string $path, ErrorReceiver $errors) {
+        public function __construct(string $path, string $contents, ErrorReceiver $errors) {
             $this->path     = $path;
-            $this->contents = file_get_contents($path);
+            $this->contents = $contents;
             if (substr($this->contents, 0, 2) == "#!") {
                 $pos              = strpos($this->contents, "\n") + 1;
                 $this->shebang    = substr($this->contents, 0, $pos);
@@ -422,6 +463,7 @@ namespace JesseSchalken\PhpTypeChecker\Parser {
             foreach ($parser->getErrors() as $error) {
                 $errors->add($error->getRawMessage(), $this->locateError($error));
             }
+            $this->contents = $contents;
         }
 
         public function locateError(\PhpParser\Error $error):CodeLoc {
