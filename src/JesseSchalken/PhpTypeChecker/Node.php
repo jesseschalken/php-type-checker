@@ -1018,7 +1018,7 @@ namespace JesseSchalken\PhpTypeChecker\Parser {
             } else if ($type instanceof \phpDocumentor\Reflection\Types\Void) {
                 return new Type\SingleValue($loc, null);
             } else if ($type instanceof \phpDocumentor\Reflection\Types\Static_) {
-                return new Type\Static_($loc);
+                return new Type\TypeVar($loc, Type\TypeVar::STATIC, $this->selfType($loc));
             } else if ($type instanceof \phpDocumentor\Reflection\Types\Resource) {
                 return new Type\Resource($loc);
             } else if ($type instanceof \phpDocumentor\Reflection\Types\Mixed) {
@@ -1026,7 +1026,7 @@ namespace JesseSchalken\PhpTypeChecker\Parser {
             } else if ($type instanceof \phpDocumentor\Reflection\Types\Scalar) {
                 return Type\Type::scalar($loc);
             } else if ($type instanceof \phpDocumentor\Reflection\Types\This) {
-                return new Type\This($loc);
+                return new Type\TypeVar($loc, Type\TypeVar::THIS, $this->selfType($loc));
             } else if ($type instanceof \phpDocumentor\Reflection\Types\Boolean) {
                 return Type\Type::bool($loc);
             } else if ($type instanceof \phpDocumentor\Reflection\Types\Callable_) {
@@ -1040,11 +1040,7 @@ namespace JesseSchalken\PhpTypeChecker\Parser {
                 }
                 return $union;
             } else if ($type instanceof \phpDocumentor\Reflection\Types\Self_) {
-                if (!$this->class) {
-                    throw new \Exception('Use of "self" outside a class');
-                } else {
-                    return new Type\Object($loc, $this->class);
-                }
+                return $this->selfType($loc);
             } else if ($type instanceof \phpDocumentor\Reflection\Types\Float_) {
                 return new Type\Float_($loc);
             } else if ($type instanceof \phpDocumentor\Reflection\Types\String_) {
@@ -1669,6 +1665,14 @@ namespace JesseSchalken\PhpTypeChecker\Parser {
 
         private function locateNode(\PhpParser\Node $node):CodeLoc {
             return $this->file->locateNode($node);
+        }
+
+        private function selfType(CodeLoc $loc):Type\Class_ {
+            if (!$this->class) {
+                throw new \Exception('Use of "self" outside a class');
+            } else {
+                return new Type\Class_($loc, $this->class);
+            }
         }
     }
 }
@@ -4653,15 +4657,9 @@ namespace JesseSchalken\PhpTypeChecker\Node\Type {
         }
 
         public final function addSingleType(SingleType $type, TypeContext $ctx):Type {
-            if ($this->containsSingleType($type, $ctx)) {
-                return $this;
-            } else if ($type->containsSingleType($this, $ctx)) {
-                return $type;
-            } else {
-                return (new Union($this->loc()))
-                    ->addSingleType($type, $ctx)
-                    ->addSingleType($this, $ctx);
-            }
+            return (new Union($this->loc()))
+                ->addSingleType($type, $ctx)
+                ->addSingleType($this, $ctx);
         }
 
         public final function subtractSingleType(SingleType $type, TypeContext $ctx):Type {
@@ -4671,9 +4669,66 @@ namespace JesseSchalken\PhpTypeChecker\Node\Type {
                 return $this;
             }
         }
+
+        public abstract function containedByConcreteType(ConcreteType $type, TypeContext $ctx):bool;
     }
 
-    class Mixed extends SingleType {
+    abstract class ConcreteType extends SingleType {
+        public abstract function containsConcreteType(ConcreteType $type, TypeContext $ctx):bool;
+
+        public final function containedByConcreteType(ConcreteType $type, TypeContext $ctx):bool {
+            return $type->containsConcreteType($this, $ctx);
+        }
+
+        public final function containsSingleType(SingleType $type, TypeContext $ctx):bool {
+            return $type->containedByConcreteType($this, $ctx);
+        }
+    }
+
+    class TypeVar extends SingleType {
+        const THIS   = '$this';
+        const STATIC = 'static';
+
+        /** @var string */
+        private $var;
+        /**
+         * @var Type The type the type var is contained by, i.e. "Foo" in "class Blah<T extends Foo>". Can be "mixed"
+         *      if not specified. This doesn't actually have to be stored here, a map from type vars to constraining
+         *      types could be stored somewhere else, but it's more convenient here.
+         */
+        private $type;
+
+        public function __construct(CodeLoc $loc, string $var, Type $type) {
+            parent::__construct($loc);
+            $this->var  = $var;
+            $this->type = $type;
+        }
+
+        public function toTypeHint() {
+            return null;
+        }
+
+        public function toString(bool $atomic = false):string {
+            return $this->var;
+        }
+
+        public function containsSingleType(SingleType $type, TypeContext $ctx):bool {
+            // A type var contains nothing besides itself, because we don't actually know what the type is going to be.
+            if ($type instanceof TypeVar) {
+                // Should we also check $this->type against $type->type?
+                // I can't imagine why they'd be different.
+                return $type->var === $this->var;
+            } else {
+                return false;
+            }
+        }
+
+        public function containedByConcreteType(ConcreteType $type, TypeContext $ctx):bool {
+            return $type->containsType($this->type, $ctx);
+        }
+    }
+
+    class Mixed extends ConcreteType {
         public function toTypeHint() {
             return null;
         }
@@ -4682,12 +4737,12 @@ namespace JesseSchalken\PhpTypeChecker\Node\Type {
             return 'mixed';
         }
 
-        public function containsSingleType(SingleType $type, TypeContext $ctx):bool {
+        public function containsConcreteType(ConcreteType $type, TypeContext $ctx):bool {
             return true;
         }
     }
 
-    class SingleValue extends SingleType {
+    class SingleValue extends ConcreteType {
         /** @var int|string|bool|float|null */
         private $value;
 
@@ -4719,7 +4774,7 @@ namespace JesseSchalken\PhpTypeChecker\Node\Type {
             }
         }
 
-        public function containsSingleType(SingleType $type, TypeContext $ctx):bool {
+        public function containsConcreteType(ConcreteType $type, TypeContext $ctx):bool {
             if ($type instanceof self) {
                 return $type->value === $this->value;
             } else {
@@ -4740,7 +4795,7 @@ namespace JesseSchalken\PhpTypeChecker\Node\Type {
      * - array of form [$object, 'method']
      * - array of form ['class', 'method']
      */
-    class Callable_ extends SingleType {
+    class Callable_ extends ConcreteType {
         public function toTypeHint() {
             return 'callable';
         }
@@ -4749,12 +4804,12 @@ namespace JesseSchalken\PhpTypeChecker\Node\Type {
             return 'callable';
         }
 
-        public function containsSingleType(SingleType $type, TypeContext $ctx):bool {
+        public function containsConcreteType(ConcreteType $type, TypeContext $ctx):bool {
             return $type instanceof self;
         }
     }
 
-    class Float_ extends SingleType {
+    class Float_ extends ConcreteType {
         public function toTypeHint() {
             return 'float';
         }
@@ -4763,7 +4818,7 @@ namespace JesseSchalken\PhpTypeChecker\Node\Type {
             return 'float';
         }
 
-        public function containsSingleType(SingleType $type, TypeContext $ctx):bool {
+        public function containsConcreteType(ConcreteType $type, TypeContext $ctx):bool {
             if ($type instanceof self) {
                 return true;
             } else if (
@@ -4777,7 +4832,7 @@ namespace JesseSchalken\PhpTypeChecker\Node\Type {
         }
     }
 
-    class String_ extends SingleType {
+    class String_ extends ConcreteType {
         public function toTypeHint() {
             return 'string';
         }
@@ -4786,7 +4841,7 @@ namespace JesseSchalken\PhpTypeChecker\Node\Type {
             return 'string';
         }
 
-        public function containsSingleType(SingleType $type, TypeContext $ctx):bool {
+        public function containsConcreteType(ConcreteType $type, TypeContext $ctx):bool {
             if ($type instanceof self) {
                 return true;
             } else if (
@@ -4800,7 +4855,7 @@ namespace JesseSchalken\PhpTypeChecker\Node\Type {
         }
     }
 
-    class Int_ extends SingleType {
+    class Int_ extends ConcreteType {
         public function toTypeHint() {
             return 'int';
         }
@@ -4809,7 +4864,7 @@ namespace JesseSchalken\PhpTypeChecker\Node\Type {
             return 'int';
         }
 
-        public function containsSingleType(SingleType $type, TypeContext $ctx):bool {
+        public function containsConcreteType(ConcreteType $type, TypeContext $ctx):bool {
             if ($type instanceof self) {
                 return true;
             } else if (
@@ -4823,7 +4878,7 @@ namespace JesseSchalken\PhpTypeChecker\Node\Type {
         }
     }
 
-    class Object extends SingleType {
+    class Object extends ConcreteType {
         public function toTypeHint() {
             return null;
         }
@@ -4832,12 +4887,10 @@ namespace JesseSchalken\PhpTypeChecker\Node\Type {
             return 'object';
         }
 
-        public function containsSingleType(SingleType $type, TypeContext $ctx):bool {
+        public function containsConcreteType(ConcreteType $type, TypeContext $ctx):bool {
             if (
                 $type instanceof self ||
-                $type instanceof Class_ ||
-                $type instanceof This ||
-                $type instanceof Static_
+                $type instanceof Class_
             ) {
                 return true;
             } else {
@@ -4846,7 +4899,7 @@ namespace JesseSchalken\PhpTypeChecker\Node\Type {
         }
     }
 
-    class Resource extends SingleType {
+    class Resource extends ConcreteType {
         public function toTypeHint() {
             return null;
         }
@@ -4855,12 +4908,12 @@ namespace JesseSchalken\PhpTypeChecker\Node\Type {
             return 'resource';
         }
 
-        public function containsSingleType(SingleType $type, TypeContext $ctx):bool {
+        public function containsConcreteType(ConcreteType $type, TypeContext $ctx):bool {
             return $type instanceof self;
         }
     }
 
-    class Class_ extends SingleType {
+    class Class_ extends ConcreteType {
         /** @var string */
         private $class;
         /** @var bool */
@@ -4880,7 +4933,7 @@ namespace JesseSchalken\PhpTypeChecker\Node\Type {
             return $this->class;
         }
 
-        public function containsSingleType(SingleType $type, TypeContext $ctx):bool {
+        public function containsConcreteType(ConcreteType $type, TypeContext $ctx):bool {
             if ($type instanceof self) {
                 if (str_ieq($type->class, $this->class)) {
                     return true;
@@ -4896,35 +4949,7 @@ namespace JesseSchalken\PhpTypeChecker\Node\Type {
         }
     }
 
-    class Static_ extends SingleType {
-        public function toTypeHint() {
-            return null;
-        }
-
-        public function toString(bool $atomic = false):string {
-            return 'static';
-        }
-
-        public function containsSingleType(SingleType $type, TypeContext $ctx):bool {
-            return $type instanceof self;
-        }
-    }
-
-    class This extends SingleType {
-        public function toTypeHint() {
-            return null;
-        }
-
-        public function toString(bool $atomic = false):string {
-            return '$this';
-        }
-
-        public function containsSingleType(SingleType $type, TypeContext $ctx):bool {
-            return $type instanceof self;
-        }
-    }
-
-    class Array_ extends SingleType {
+    class Array_ extends ConcreteType {
         /** @var Type */
         private $inner;
 
@@ -4941,7 +4966,7 @@ namespace JesseSchalken\PhpTypeChecker\Node\Type {
             return $this->inner->toString(true) . '[]';
         }
 
-        public function containsSingleType(SingleType $type, TypeContext $ctx):bool {
+        public function containsConcreteType(ConcreteType $type, TypeContext $ctx):bool {
             if ($type instanceof self) {
                 return $this->inner->containsType($type->inner, $ctx);
             } else if ($type instanceof Shape) {
@@ -4956,7 +4981,7 @@ namespace JesseSchalken\PhpTypeChecker\Node\Type {
      * A "shape" is an array with a fixed set of (key, type) pairs. It effectively allows the structural typing of
      * arrays.
      */
-    class Shape extends SingleType {
+    class Shape extends ConcreteType {
         /**
          * @var Type[] Mapping from keys to types
          */
@@ -5006,7 +5031,7 @@ namespace JesseSchalken\PhpTypeChecker\Node\Type {
             return 'array';
         }
 
-        public function containsSingleType(SingleType $type, TypeContext $ctx):bool {
+        public function containsConcreteType(ConcreteType $type, TypeContext $ctx):bool {
             if ($type instanceof self) {
                 foreach ($this->keys as $key => $t) {
                     if (!$t->containsType($type->get($key), $ctx)) {
