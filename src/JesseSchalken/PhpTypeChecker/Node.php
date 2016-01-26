@@ -495,9 +495,7 @@ namespace JesseSchalken\PhpTypeChecker\Parser {
         }
     }
 
-    class Parser {
-        const TEMPORARY_TRAIT_CLASS = '__TEMPORARY_TRAIT_CLASS';
-
+    final class NamespaceContext {
         /** @var \PhpParser\Node\Name */
         private $namespace;
         /** @var Uses */
@@ -507,19 +505,61 @@ namespace JesseSchalken\PhpTypeChecker\Parser {
         /** @var Uses */
         private $useConstant;
 
+        public function __construct(\PhpParser\Node\Name $name = null, GlobalDefinedNames $globals) {
+            $this->namespace   = $name ?: new \PhpParser\Node\Name([]);
+            $this->useClass    = new ClassUses($this->namespace, $globals->classes);
+            $this->useFunction = new FunctionUses($this->namespace, $globals->functions);
+            $this->useConstant = new ConstantUses($this->namespace, $globals->constants);
+        }
+
+        public function __clone() {
+            clone_ref($this->useFunction);
+            clone_ref($this->useClass);
+            clone_ref($this->useConstant);
+        }
+
+        public function getNamespace():string {
+            return $this->namespace->toString();
+        }
+
+        public function getClassAliasMap():array {
+            return $this->useClass->getMap();
+        }
+
+        public function resolveFunction(\PhpParser\Node\Name $name):string {
+            return $this->useFunction->resolve($name, $this->useClass)->toString();
+        }
+
+        public function resolveClass(\PhpParser\Node\Name $name):string {
+            return $this->useClass->resolve($name, $this->useClass)->toString();
+        }
+
+        public function resolveConstant(\PhpParser\Node\Name $name):string {
+            return $this->useConstant->resolve($name, $this->useClass)->toString();
+        }
+
+        public function addFunction(\PhpParser\Node\Name $name, string $alias = null) {
+            $this->useFunction->add($name, $alias);
+        }
+
+        public function addClass(\PhpParser\Node\Name $name, string $alias = null) {
+            $this->useClass->add($name, $alias);
+        }
+
+        public function addConstant(\PhpParser\Node\Name $name, string $alias = null) {
+            $this->useConstant->add($name, $alias);
+        }
+    }
+
+    class Parser {
+        /** @var NamespaceContext */
+        private $namespace;
         /** @var GlobalDefinedNames */
         private $globals;
-
-        /** @var DefinedNames */
-        private $locals;
-
         /** @var ParsedFile */
         private $file;
-
         /** @var string|null */
         private $class;
-        /** @var string|null */
-        private $trait;
         /** @var string|null */
         private $parent;
         /** @var string|null */
@@ -528,33 +568,29 @@ namespace JesseSchalken\PhpTypeChecker\Parser {
         private $errors;
 
         public function __construct(ParsedFile $file, GlobalDefinedNames $globals, ErrorReceiver $errors) {
-            $this->globals = $globals;
-            $this->locals  = new DefinedNamesCaseSensitive();
-            $this->file    = $file;
-            $this->errors  = $errors;
-            $this->resetNamespace();
+            $this->globals   = $globals;
+            $this->file      = $file;
+            $this->errors    = $errors;
+            $this->namespace = new NamespaceContext(null, $globals);
         }
 
-        private function resetNamespace(\PhpParser\Node\Name $name = null) {
-            $this->namespace   = $name ?: new \PhpParser\Node\Name([]);
-            $this->useClass    = new ClassUses($this->namespace, $this->globals->classes);
-            $this->useFunction = new FunctionUses($this->namespace, $this->globals->functions);
-            $this->useConstant = new ConstantUses($this->namespace, $this->globals->constants);
-        }
+        private function withMagicConstants(
+            string $class = null,
+            string $parent = null,
+            string $function = null
+        ):self {
+            $self = clone $this;
 
-        private function resetMagicConstants() {
-            $this->class    = null;
-            $this->trait    = null;
-            $this->parent   = null;
-            $this->function = null;
+            $self->class    = $class;
+            $self->parent   = $parent;
+            $self->function = $function;
+
+            return $self;
         }
 
         public function __clone() {
-            clone_ref($this->useFunction);
-            clone_ref($this->useClass);
-            clone_ref($this->useConstant);
+            clone_ref($this->namespace);
             clone_ref($this->class);
-            clone_ref($this->trait);
             clone_ref($this->parent);
             clone_ref($this->function);
         }
@@ -584,15 +620,15 @@ namespace JesseSchalken\PhpTypeChecker\Parser {
                 }
             }
 
-            return new Expr\ClassName($loc, $this->useClass->resolve($name, $this->useClass)->toString());
+            return new Expr\ClassName($loc, $this->namespace->resolveClass($name));
         }
 
         private function resolveConst(\PhpParser\Node\Name $name):string {
-            return $this->useConstant->resolve($name, $this->useClass)->toString();
+            return $this->namespace->resolveConstant($name);
         }
 
         private function resolveFunction(\PhpParser\Node\Name $name):string {
-            return $this->useFunction->resolve($name, $this->useClass)->toString();
+            return $this->namespace->resolveFunction($name);
         }
 
         /**
@@ -668,16 +704,15 @@ namespace JesseSchalken\PhpTypeChecker\Parser {
             } elseif ($node instanceof \PhpParser\Node\Stmt\Return_) {
                 return new Stmt\Return_($loc, $this->parseExprNull($node->expr));
             } elseif ($node instanceof \PhpParser\Node\Stmt\Namespace_) {
-                $copy = clone $this;
-                $copy->resetNamespace($node->name);
-                return $copy->parseStmts($loc, $node->stmts);
+                $self = clone $this;
+
+                $self->namespace = new NamespaceContext($node->name, $this->globals);
+                return $self->parseStmts($loc, $node->stmts);
             } elseif ($node instanceof \PhpParser\Node\Stmt\Class_) {
                 return $this->parseClass($node);
             } elseif ($node instanceof \PhpParser\Node\Stmt\Function_) {
                 $name = $this->prefixName($node->name);
-                $self = clone $this;
-                $self->resetMagicConstants();
-                $self->function = $name;
+                $self = $this->withMagicConstants(null, null, $name);
                 return new Stmt\Function_(
                     $loc,
                     $name,
@@ -686,10 +721,7 @@ namespace JesseSchalken\PhpTypeChecker\Parser {
                 );
             } elseif ($node instanceof \PhpParser\Node\Stmt\Interface_) {
                 $name = $this->prefixName($node->name);
-                $self = clone $this;
-
-                $self->resetMagicConstants();
-                $self->class = $name;
+                $self = $this->withMagicConstants($name, null, null);
 
                 $extends = [];
                 foreach ($node->extends as $extend) {
@@ -698,12 +730,7 @@ namespace JesseSchalken\PhpTypeChecker\Parser {
                 return new Stmt\Interface_($loc, $name, $extends, $self->parseClassMembers($node));
             } elseif ($node instanceof \PhpParser\Node\Stmt\Trait_) {
                 $name = $this->prefixName($node->name);
-                $self = clone $this;
-
-                $self->resetMagicConstants();
-                $self->trait  = $name;
-                $self->class  = self::TEMPORARY_TRAIT_CLASS;
-                $self->parent = self::TEMPORARY_TRAIT_CLASS;
+                $self = $this->withMagicConstants($name, null, null);
                 return new Stmt\Trait_($loc, $name, $self->parseClassMembers($node));
             } elseif ($node instanceof \PhpParser\Node\Stmt\Use_) {
                 $this->addUses($node->uses, $node->type);
@@ -842,13 +869,18 @@ namespace JesseSchalken\PhpTypeChecker\Parser {
             foreach ($node->stmts as $stmt) {
                 $loc = $this->locateNode($stmt);
                 if ($stmt instanceof \PhpParser\Node\Stmt\ClassMethod) {
+                    $self = $this->withMagicConstants(
+                        $this->class,
+                        $this->parent,
+                        $stmt->name
+                    );
                     $stmts[] = new Stmt\Method_(
                         $loc,
                         $stmt->name,
-                        $this->parseFunctionType($stmt),
-                        $stmt->stmts === null ? null : $this->parseStmts($loc, $stmt->stmts),
+                        $self->parseFunctionType($stmt),
+                        $stmt->stmts === null ? null : $self->parseStmts($loc, $stmt->stmts),
                         !!($stmt->type & \PhpParser\Node\Stmt\Class_::MODIFIER_FINAL),
-                        $this->parseVisibility($stmt->type),
+                        $self->parseVisibility($stmt->type),
                         !!($stmt->type & \PhpParser\Node\Stmt\Class_::MODIFIER_STATIC)
                     );
                 } else if ($stmt instanceof \PhpParser\Node\Stmt\ClassConst) {
@@ -957,8 +989,8 @@ namespace JesseSchalken\PhpTypeChecker\Parser {
 
         private function getDocBlockContext():\phpDocumentor\Reflection\DocBlock\Context {
             return new \phpDocumentor\Reflection\DocBlock\Context(
-                $this->namespace->toString(),
-                $this->useClass->getMap()
+                $this->namespace->getNamespace(),
+                $this->namespace->getClassAliasMap()
             );
         }
 
@@ -1172,7 +1204,7 @@ namespace JesseSchalken\PhpTypeChecker\Parser {
                         throw new \Exception('Invalid simple type: ' . $type);
                 }
             } else if ($type instanceof \PhpParser\Node\Name) {
-                return new Type\Class_($loc, $this->resolveClass($type)->toString());
+                return $this->resolveClass($type)->toType($this->class, false);
             } else {
                 throw new \Exception('huh?');
             }
@@ -1190,13 +1222,13 @@ namespace JesseSchalken\PhpTypeChecker\Parser {
                 $type = $use->type === \PhpParser\Node\Stmt\Use_::TYPE_UNKNOWN ? $type_ : $use->type;
                 switch ($type) {
                     case \PhpParser\Node\Stmt\Use_::TYPE_CONSTANT:
-                        $this->useConstant->add($name, $use->alias);
+                        $this->namespace->addConstant($name, $use->alias);
                         break;
                     case \PhpParser\Node\Stmt\Use_::TYPE_FUNCTION:
-                        $this->useFunction->add($name, $use->alias);
+                        $this->namespace->addFunction($name, $use->alias);
                         break;
                     case \PhpParser\Node\Stmt\Use_::TYPE_NORMAL:
-                        $this->useClass->add($name, $use->alias);
+                        $this->namespace->addClass($name, $use->alias);
                         break;
                     default:
                         throw new \Exception('Invalid use type: ' . $type);
@@ -1614,7 +1646,7 @@ namespace JesseSchalken\PhpTypeChecker\Parser {
                 case Expr\MagicConst::METHOD:
                     return $this->class ? "$this->class::$this->function" : "$this->function";
                 case Expr\MagicConst::NAMESPACE:
-                    return $this->namespace->toString();
+                    return $this->namespace->getNamespace();
                 default:
                     throw new \Exception("Invalid magic constant type: $type");
             }
@@ -1648,14 +1680,10 @@ namespace JesseSchalken\PhpTypeChecker\Parser {
                 $implements[] = $this->resolveClass($impl)->toString();
             }
 
-            $self = clone $this;
-            $self->resetMagicConstants();
-            $self->class  = $name;
-            $self->parent = $parent;
             return new Stmt\Class_(
                 $loc,
                 $name,
-                $self->parseClassMembers($node),
+                $this->withMagicConstants($name, $parent, null)->parseClassMembers($node),
                 $parent,
                 $implements,
                 $node->type & \PhpParser\Node\Stmt\Class_::MODIFIER_ABSTRACT ? true : false,
@@ -3223,6 +3251,7 @@ namespace JesseSchalken\PhpTypeChecker\Node\Stmt {
 
 namespace JesseSchalken\PhpTypeChecker\Node\Expr {
 
+    use JesseSchalken\PhpTypeChecker\Node\Type;
     use JesseSchalken\PhpTypeChecker\Node\CodeLoc;
     use JesseSchalken\PhpTypeChecker\Node\Node;
     use JesseSchalken\PhpTypeChecker\Node\Stmt;
@@ -4389,6 +4418,8 @@ namespace JesseSchalken\PhpTypeChecker\Node\Expr {
 
     abstract class AbstractClassName extends Expr {
         public abstract function toString(string $static = null):string;
+
+        public abstract function toType(string $static = null, bool $strict = false):Type\Type;
     }
 
     /**
@@ -4404,6 +4435,10 @@ namespace JesseSchalken\PhpTypeChecker\Node\Expr {
                 throw new \Exception("Illegal class name: $class");
             }
             $this->class = $class;
+        }
+
+        public function toType(string $static = null, bool $strict = false):Type\Type {
+            return new Type\Class_($this->loc(), $this->class, $strict);
         }
 
         public function toString(string $static = null):string {
@@ -4440,6 +4475,12 @@ namespace JesseSchalken\PhpTypeChecker\Node\Expr {
             } else {
                 return $static;
             }
+        }
+
+        public function toType(string $static = null, bool $strict = false):Type\Type {
+            $type = new Type\Class_($this->loc(), $this->toString($static), $strict);
+            $type = new Type\TypeVar($this->loc(), Type\TypeVar::STATIC, $type);
+            return $type;
         }
 
         public function subStmts():array {
@@ -4528,7 +4569,9 @@ namespace JesseSchalken\PhpTypeChecker\Node\Type {
         /**
          * @return null|string|\PhpParser\Node\Name
          */
-        public abstract function toTypeHint();
+        public function toTypeHint() {
+            return null;
+        }
 
         public abstract function toString(bool $atomic = false):string;
 
@@ -4573,6 +4616,13 @@ namespace JesseSchalken\PhpTypeChecker\Node\Type {
         public abstract function addSingleType(SingleType $type, TypeContext $ctx):self;
 
         public abstract function subtractSingleType(SingleType $type, TypeContext $ctx):self;
+
+        /**
+         * @param self[]      $vars
+         * @param TypeContext $ctx
+         * @return Type
+         */
+        public abstract function fillTypeVars(array $vars, TypeContext $ctx):self;
     }
 
     final class Union extends Type {
@@ -4649,6 +4699,14 @@ namespace JesseSchalken\PhpTypeChecker\Node\Type {
                     return $atomic ? "($join)" : $join;
             }
         }
+
+        public function fillTypeVars(array $vars, TypeContext $ctx):self {
+            $union = new self($this->loc());
+            foreach ($this->types as $type) {
+                $union = $union->addType($type->fillTypeVars($vars, $ctx), $ctx);
+            }
+            return $union;
+        }
     }
 
     abstract class SingleType extends Type {
@@ -4683,6 +4741,10 @@ namespace JesseSchalken\PhpTypeChecker\Node\Type {
         public final function containsSingleType(SingleType $type, TypeContext $ctx):bool {
             return $type->containedByConcreteType($this, $ctx);
         }
+
+        public final function fillTypeVars(array $vars, TypeContext $ctx):self {
+            return $this;
+        }
     }
 
     class TypeVar extends SingleType {
@@ -4705,7 +4767,7 @@ namespace JesseSchalken\PhpTypeChecker\Node\Type {
         }
 
         public function toTypeHint() {
-            return null;
+            return $this->type->toTypeHint();
         }
 
         public function toString(bool $atomic = false):string {
@@ -4726,13 +4788,18 @@ namespace JesseSchalken\PhpTypeChecker\Node\Type {
         public function containedByConcreteType(ConcreteType $type, TypeContext $ctx):bool {
             return $type->containsType($this->type, $ctx);
         }
+
+        public function fillTypeVars(array $vars, TypeContext $ctx):self {
+            if (isset($vars[$this->var])) {
+                // TODO make sure the type matches $this->type
+                return $vars[$this->var];
+            } else {
+                return $this;
+            }
+        }
     }
 
     class Mixed extends ConcreteType {
-        public function toTypeHint() {
-            return null;
-        }
-
         public function toString(bool $atomic = false):string {
             return 'mixed';
         }
@@ -4756,7 +4823,21 @@ namespace JesseSchalken\PhpTypeChecker\Node\Type {
         }
 
         public function toTypeHint() {
-            return null;
+            switch (true) {
+                case $this->isFloat():
+                    return 'float';
+                case $this->isInt():
+                    return 'int';
+                case $this->isBool():
+                    return 'bool';
+                case $this->isString():
+                    return 'string';
+                case $this->isNull():
+                    // "void" when PHP gets void return types and the type hint is for a return type
+                    return null;
+                default:
+                    throw new \Exception('Invalid type for SingleValue: ' . gettype($this->value));
+            }
         }
 
         public function toString(bool $atomic = false):string {
@@ -4782,8 +4863,24 @@ namespace JesseSchalken\PhpTypeChecker\Node\Type {
             }
         }
 
-        public function value() {
-            return $this->value;
+        public function isInt():bool {
+            return is_int($this->value);
+        }
+
+        public function isFloat():bool {
+            return is_float($this->value);
+        }
+
+        public function isBool():bool {
+            return is_bool($this->value);
+        }
+
+        public function isString():bool {
+            return is_string($this->value);
+        }
+
+        public function isNull():bool {
+            return is_null($this->value);
         }
     }
 
@@ -4821,10 +4918,7 @@ namespace JesseSchalken\PhpTypeChecker\Node\Type {
         public function containsConcreteType(ConcreteType $type, TypeContext $ctx):bool {
             if ($type instanceof self) {
                 return true;
-            } else if (
-                $type instanceof SingleValue &&
-                is_float($type->value())
-            ) {
+            } else if ($type instanceof SingleValue && $type->isFloat()) {
                 return true;
             } else {
                 return false;
@@ -4844,10 +4938,7 @@ namespace JesseSchalken\PhpTypeChecker\Node\Type {
         public function containsConcreteType(ConcreteType $type, TypeContext $ctx):bool {
             if ($type instanceof self) {
                 return true;
-            } else if (
-                $type instanceof SingleValue &&
-                is_string($type->value())
-            ) {
+            } else if ($type instanceof SingleValue && $type->isString()) {
                 return true;
             } else {
                 return false;
@@ -4867,10 +4958,7 @@ namespace JesseSchalken\PhpTypeChecker\Node\Type {
         public function containsConcreteType(ConcreteType $type, TypeContext $ctx):bool {
             if ($type instanceof self) {
                 return true;
-            } else if (
-                $type instanceof SingleValue &&
-                is_int($type->value())
-            ) {
+            } else if ($type instanceof SingleValue && $type->isInt()) {
                 return true;
             } else {
                 return false;
@@ -4900,10 +4988,6 @@ namespace JesseSchalken\PhpTypeChecker\Node\Type {
     }
 
     class Resource extends ConcreteType {
-        public function toTypeHint() {
-            return null;
-        }
-
         public function toString(bool $atomic = false):string {
             return 'resource';
         }
