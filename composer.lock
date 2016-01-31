@@ -4,8 +4,8 @@
         "Read more about it at https://getcomposer.org/doc/01-basic-usage.md#composer-lock-the-lock-file",
         "This file is @generated automatically"
     ],
-    "hash": "ad485e3834a6145801e3aa480d30b01f",
-    "content-hash": "60efb07e33096498f8975444c65dcab4",
+    "hash": "a0c8f6e775d3f67189e7950acb2cfa61",
+    "content-hash": "24eb9818c3e790a994020596bd31a8af",
     "packages": [
         {
             "name": "docopt/docopt",
@@ -108,6 +108,42 @@
             "time": "2015-06-14 21:17:01"
         },
         {
+            "name": "jesseschalken/enum",
+            "version": "v1.0",
+            "source": {
+                "type": "git",
+                "url": "https://github.com/jesseschalken/php-enum.git",
+                "reference": "e15e5dcae1b8d81cfe6a06875cad4b0b2fd259fb"
+            },
+            "dist": {
+                "type": "zip",
+                "url": "https://api.github.com/repos/jesseschalken/php-enum/zipball/e15e5dcae1b8d81cfe6a06875cad4b0b2fd259fb",
+                "reference": "e15e5dcae1b8d81cfe6a06875cad4b0b2fd259fb",
+                "shasum": ""
+            },
+            "require-dev": {
+                "phpunit/phpunit": "^5.1.4"
+            },
+            "type": "library",
+            "autoload": {
+                "files": [
+                    "Enum.php"
+                ]
+            },
+            "notification-url": "https://packagist.org/downloads/",
+            "license": [
+                "MIT"
+            ],
+            "authors": [
+                {
+                    "name": "Jesse Schalken",
+                    "email": "me@jesseschalken.com"
+                }
+            ],
+            "description": "PHP Enums without using Reflection",
+            "time": "2016-01-15 17:35:02"
+        },
+        {
             "name": "jesseschalken/magic-utils",
             "version": "0.2",
             "source": {
@@ -145,6 +181,42 @@
             ],
             "description": "Traits and functions to help with implementing PHP's magic methods",
             "time": "2016-01-03 04:34:14"
+        },
+        {
+            "name": "jesseschalken/set",
+            "version": "v1.0.2",
+            "source": {
+                "type": "git",
+                "url": "https://github.com/jesseschalken/php-set.git",
+                "reference": "f7669cf6356e79715304181fff7eca32f1279455"
+            },
+            "dist": {
+                "type": "zip",
+                "url": "https://api.github.com/repos/jesseschalken/php-set/zipball/f7669cf6356e79715304181fff7eca32f1279455",
+                "reference": "f7669cf6356e79715304181fff7eca32f1279455",
+                "shasum": ""
+            },
+            "require-dev": {
+                "phpunit/phpunit": "^5.1.4"
+            },
+            "type": "library",
+            "autoload": {
+                "files": [
+                    "Set.php"
+                ]
+            },
+            "notification-url": "https://packagist.org/downloads/",
+            "license": [
+                "MIT"
+            ],
+            "authors": [
+                {
+                    "name": "Jesse Schalken",
+                    "email": "me@jesseschalken.com"
+                }
+            ],
+            "description": "java.utils.Set for PHP implementing ArrayAccess, Countable and IteratorAggregate with O(1) conversion to/from array keys",
+            "time": "2016-01-18 00:21:26"
         },
         {
             "name": "nikic/php-parser",
@@ -3797,20 +3869,20 @@
         },
         {
             "name": "zendframework/zend-view",
-            "version": "2.5.2",
+            "version": "2.5.3",
             "source": {
                 "type": "git",
                 "url": "https://github.com/zendframework/zend-view.git",
-                "reference": "b3d31e7ba6d0c13a76afe5c8d914a8ff08616b0d"
+                "reference": "f1b682652045b126e0eb0852a1c9fb76b21dfcdd"
             },
             "dist": {
                 "type": "zip",
-                "url": "https://api.github.com/repos/zendframework/zend-view/zipball/b3d31e7ba6d0c13a76afe5c8d914a8ff08616b0d",
-                "reference": "b3d31e7ba6d0c13a76afe5c8d914a8ff08616b0d",
+                "url": "https://api.github.com/repos/zendframework/zend-view/zipball/f1b682652045b126e0eb0852a1c9fb76b21dfcdd",
+                "reference": "f1b682652045b126e0eb0852a1c9fb76b21dfcdd",
                 "shasum": ""
             },
             "require": {
-                "php": ">=5.5",
+                "php": "^5.5 || ^7.0",
                 "zendframework/zend-eventmanager": "~2.5",
                 "zendframework/zend-loader": "~2.5",
                 "zendframework/zend-stdlib": "~2.5"
@@ -3876,7 +3948,7 @@
                 "view",
                 "zf2"
             ],
-            "time": "2015-06-16 15:32:26"
+            "time": "2016-01-19 20:49:13"
         },
         {
             "name": "zendframework/zend-xmlrpc",

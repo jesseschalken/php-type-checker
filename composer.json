@@ -6,7 +6,9 @@
         "jesseschalken/magic-utils": "^0.2.0",
         "docopt/docopt": "1.0.2",
         "phpdocumentor/type-resolver": "*",
-        "phpdocumentor/reflection-docblock": "*"
+        "phpdocumentor/reflection-docblock": "*",
+        "jesseschalken/enum": "v1.0",
+        "jesseschalken/set": "v1.0.2"
     },
     "autoload": {
         "files": ["src/autoload.php"]

@@ -1,97 +1,89 @@
 #!/usr/bin/php
 <?php
 
-namespace JesseSchalken\PhpTypeChecker {
+namespace JesseSchalken\PhpTypeChecker;
 
-    use JesseSchalken\PhpTypeChecker\Node\CodeLoc;
-    use JesseSchalken\PhpTypeChecker\Node\ErrorReceiver;
-    use JesseSchalken\PhpTypeChecker\Node\File;
+require_once __DIR__ . '/../vendor/autoload.php';
 
-    require_once __DIR__ . '/../vendor/autoload.php';
-
-    /**
-     * @param string $input
-     * @return string[]
-     */
-    function recursive_scan($input):array {
-        if (is_dir($input) && !is_link($input)) {
-            $result = [];
-            foreach (array_diff(scandir($input), ['.', '..']) as $item) {
-                foreach (recursive_scan($input . DIRECTORY_SEPARATOR . $item) as $item2) {
-                    $result[] = $item2;
-                }
+/**
+ * @param string $input
+ * @return string[]
+ */
+function recursive_scan($input):array {
+    if (is_dir($input) && !is_link($input)) {
+        $result = [];
+        foreach (array_diff(scandir($input), ['.', '..']) as $item) {
+            foreach (recursive_scan($input . DIRECTORY_SEPARATOR . $item) as $item2) {
+                $result[] = $item2;
             }
-            return $result;
-        } else if (pathinfo($input, PATHINFO_EXTENSION) === 'php') {
-            return [$input];
-        } else {
-            return [];
         }
+        return $result;
+    } else if (pathinfo($input, PATHINFO_EXTENSION) === 'php') {
+        return [$input];
+    } else {
+        return [];
     }
+}
 
-    /**
-     * @param string $input
-     * @return string[]
-     */
-    function recursive_scan2($input):array {
-        if (is_dir($input) && !is_link($input)) {
-            return recursive_scan($input);
-        } else {
-            return [$input];
-        }
+/**
+ * @param string $input
+ * @return string[]
+ */
+function recursive_scan2($input):array {
+    if (is_dir($input) && !is_link($input)) {
+        return recursive_scan($input);
+    } else {
+        return [$input];
     }
+}
 
-    function main() {
-        $args = \Docopt::handle(<<<'s'
+function main() {
+    $args = \Docopt::handle(<<<'s'
 Usage:
     phptc [--include=DIR]... IN_DIR [OUT_DIR]
 
 s
-        );
+    );
 
-        $input  = $args['IN_DIR'];
-        $output = $args['OUT_DIR'];
-        $files  = recursive_scan2($input);
-        foreach ($args['--include'] as $include) {
-            $files = array_merge($files, recursive_scan2($include));
+    $input  = $args['IN_DIR'];
+    $output = $args['OUT_DIR'];
+    $files  = recursive_scan2($input);
+    foreach ($args['--include'] as $include) {
+        $files = array_merge($files, recursive_scan2($include));
+    }
+    $files = array_unique($files);
+    sort($files, SORT_STRING);
+    $contents = [];
+    foreach ($files as $path) {
+        $contents[$path] = file_get_contents($path);
+    }
+    $files = File::parse($contents, new class() extends ErrorReceiver {
+        public function add(string $message, CodeLoc $loc) {
+            print $loc->format($message);
         }
-        $files = array_unique($files);
-        sort($files, SORT_STRING);
-        $contents = array();
-        foreach ($files as $path) {
-            $contents[$path] = file_get_contents($path);
-        }
-        $files = File::parse($contents, new class() extends ErrorReceiver {
-            public function add(string $message, CodeLoc $loc) {
-                print $loc->format($message);
-            }
-        });
-        if ($output) {
-            foreach ($files as $file) {
-                $path = $file->path();
-                $pos  = strlen($input);
+    });
+    if ($output) {
+        foreach ($files as $file) {
+            $path = $file->path();
+            $pos  = strlen($input);
 
-                if (substr($path, 0, $pos) === $input) {
-                    $path = $output . substr($path, $pos);
-                } else {
-                    continue;
-                }
-
-                $dir = dirname($path);
-                if (!is_dir($dir)) {
-                    mkdir($dir, 0777, true);
-                }
-                file_put_contents($path, $file->unparse());
+            if (substr($path, 0, $pos) === $input) {
+                $path = $output . substr($path, $pos);
+            } else {
+                continue;
             }
+
+            $dir = dirname($path);
+            if (!is_dir($dir)) {
+                mkdir($dir, 0777, true);
+            }
+            file_put_contents($path, $file->unparse());
         }
     }
-
-    class Project {
-
-    }
-
-    ini_set('memory_limit', '1000M');
-    ini_set('xdebug.max_nesting_level', '10000');
-
-    main();
 }
+
+ini_set('memory_limit', '1000M');
+ini_set('xdebug.max_nesting_level', '10000');
+
+main();
+
