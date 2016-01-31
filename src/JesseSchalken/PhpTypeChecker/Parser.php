@@ -1062,7 +1062,12 @@ final class Parser {
     private function parseExpr(\PhpParser\Node\Expr $node):Expr\Expr {
         $loc = $this->locateNode($node);
         if ($node instanceof \PhpParser\Node\Expr\Variable) {
-            return new LValue\Variable($loc, $this->parseExprString($node->name, $loc));
+            $name = $node->name;
+            if (is_string($name) && LValue\SuperGlobal::valid($name)) {
+                return new LValue\SuperGlobalAccess($loc, new LValue\SuperGlobal($name));
+            } else {
+                return new LValue\Variable($loc, $this->parseExprString($name, $loc));
+            }
         } elseif ($node instanceof \PhpParser\Node\Expr\ConstFetch) {
             $className = $this->resolveConst($node->name);
             switch (strtolower($className)) {
