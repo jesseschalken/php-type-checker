@@ -152,18 +152,18 @@ class File extends Node {
     }
 
     /**
-     * @param Definitions\GlobalDefinitions $defns
+     * @param Decls\GlobalDecls $defns
      * @return void
      */
-    public function gatherDefinitions(Definitions\GlobalDefinitions $defns) {
+    public function gatherDefinitions(Decls\GlobalDecls $defns) {
     }
 
     /**
-     * @param Definitions\GlobalDefinitions $defns
-     * @param ErrorReceiver                 $errors
+     * @param Decls\GlobalDecls $defns
+     * @param ErrorReceiver     $errors
      * @return void
      */
-    public function typeCheck(Definitions\GlobalDefinitions $defns, ErrorReceiver $errors) {
+    public function typeCheck(Decls\GlobalDecls $defns, ErrorReceiver $errors) {
     }
 }
 

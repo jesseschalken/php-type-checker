@@ -32,7 +32,7 @@ abstract class Stmt extends Node {
     }
 
     /**
-     * @return Declaration[]
+     * @return \JesseSchalken\PhpTypeChecker\Defns\Definition[]
      */
     public function findDeclarations():array {
         $decls = [];
@@ -157,20 +157,6 @@ abstract class SingleStmt extends Stmt {
 }
 
 abstract class ControlStructure extends SingleStmt {
-}
-
-abstract class Declaration extends SingleStmt {
-    public abstract function name():string;
-
-    public final function namespace_():string {
-        return extract_namespace($this->name());
-    }
-
-    public final function findDeclarations():array {
-        $decls   = parent::findDeclarations();
-        $decls[] = $this;
-        return $decls;
-    }
 }
 
 abstract class VariableType extends SingleStmt {
@@ -332,7 +318,7 @@ class InlineHTML extends SingleStmt {
     }
 }
 
-abstract class Classish extends Declaration {
+abstract class Classish extends \JesseSchalken\PhpTypeChecker\Defns\Definition {
     private $name;
 
     public function __construct(CodeLoc $loc, string $name) {
@@ -504,7 +490,7 @@ class Interface_ extends Classish {
     }
 }
 
-class Function_ extends Declaration {
+class Function_ extends \JesseSchalken\PhpTypeChecker\Defns\Definition {
     /** @var string */
     private $name;
     /** @var Block|null */
@@ -1063,7 +1049,7 @@ class Echo_ extends SingleStmt {
     }
 }
 
-class Const_ extends Declaration {
+class Const_ extends \JesseSchalken\PhpTypeChecker\Defns\Definition {
     /** @var string */
     private $name;
     /** @var Expr\Expr */

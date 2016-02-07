@@ -4,6 +4,7 @@ namespace JesseSchalken\PhpTypeChecker\Type;
 
 use JesseSchalken\PhpTypeChecker;
 use JesseSchalken\PhpTypeChecker\CodeLoc;
+use JesseSchalken\PhpTypeChecker\Expr;
 use function JesseSchalken\PhpTypeChecker\str_ieq;
 
 \phpDocumentor\Reflection\DocBlock\Tag::registerTagHandler(
@@ -38,7 +39,7 @@ class DummyTypeContext implements TypeContext {
 }
 
 abstract class Type extends PhpTypeChecker\Node {
-    static function union(CodeLoc $loc, array $types):self {
+    public final static function union(CodeLoc $loc, array $types):self {
         $union = new Union($loc);
         foreach ($types as $type) {
             $union = $union->addType($type, new DummyTypeContext());
@@ -46,41 +47,41 @@ abstract class Type extends PhpTypeChecker\Node {
         return $union;
     }
 
-    static function scalar(CodeLoc $loc):self {
+    public final static function scalar(CodeLoc $loc):self {
         return self::union(
             $loc, [
-            new Int_($loc),
-            new String_($loc),
-            new Float_($loc),
-            new SingleValue($loc, true),
-            new SingleValue($loc, false),
-        ]
+                new Int_($loc),
+                new String_($loc),
+                new Float_($loc),
+                new SingleValue($loc, true),
+                new SingleValue($loc, false),
+            ]
         );
     }
 
-    static function number(CodeLoc $loc):self {
+    public final static function number(CodeLoc $loc):self {
         return self::union(
             $loc, [
-            new Int_($loc),
-            new String_($loc),
-        ]
+                new Int_($loc),
+                new String_($loc),
+            ]
         );
     }
 
-    static function bool(CodeLoc $loc):self {
+    public final static function bool(CodeLoc $loc):self {
         return self::union(
             $loc, [
-            new SingleValue($loc, true),
-            new SingleValue($loc, false),
-        ]
+                new SingleValue($loc, true),
+                new SingleValue($loc, false),
+            ]
         );
     }
 
-    static function null(CodeLoc $loc):self {
+    public final static function null(CodeLoc $loc):self {
         return new SingleValue($loc, null);
     }
 
-    static function none(CodeLoc $loc):self {
+    public final static function none(CodeLoc $loc):self {
         return new Union($loc);
     }
 
@@ -141,6 +142,14 @@ abstract class Type extends PhpTypeChecker\Node {
      * @return Type
      */
     public abstract function fillTypeVars(array $vars, TypeContext $ctx):self;
+
+    public function isCallableMethodOf(Type $type, TypeContext $ctx):bool {
+        return false;
+    }
+
+    public function hasCallableMethod(string $method, TypeContext $ctx):bool {
+        return false;
+    }
 }
 
 final class Union extends Type {
@@ -224,6 +233,24 @@ final class Union extends Type {
             $union = $union->addType($type->fillTypeVars($vars, $ctx), $ctx);
         }
         return $union;
+    }
+
+    public function isCallableMethodOf(Type $type, TypeContext $ctx):bool {
+        foreach ($this->types as $t) {
+            if (!$t->isCallableMethodOf($type, $ctx)) {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    public function hasCallableMethod(string $method, TypeContext $ctx):bool {
+        foreach ($this->types as $t) {
+            if (!$t->hasCallableMethod($method, $ctx)) {
+                return false;
+            }
+        }
+        return true;
     }
 }
 
@@ -348,7 +375,11 @@ class TypeVar extends SingleType {
     }
 
     public function toTypeHint() {
-        return $this->type->toTypeHint();
+        if ($this->var === self::STATIC) {
+            return 'static';
+        } else {
+            return $this->type->toTypeHint();
+        }
     }
 
     public function toString(bool $atomic = false):string {
@@ -374,6 +405,14 @@ class TypeVar extends SingleType {
         } else {
             return $this;
         }
+    }
+
+    public function isCallableMethodOf(Type $type, TypeContext $ctx):bool {
+        return $this->type->isCallableMethodOf($type, $ctx);
+    }
+
+    public function hasCallableMethod(string $method, TypeContext $ctx):bool {
+        return $this->type->hasCallableMethod($method, $ctx);
     }
 }
 
@@ -426,7 +465,7 @@ class SingleValue extends ConcreteType {
         } else {
             $result = var_export($this->value, true);
             // Make sure a float has a decimal point
-            if (is_float($this->value) && strpos($result, '.') === false) {
+            if ($this->isFloat() && strpos($result, '.') === false) {
                 $result .= '.0';
             }
             return $result;
@@ -471,6 +510,24 @@ class SingleValue extends ConcreteType {
 
     public function isNull():bool {
         return is_null($this->value);
+    }
+
+    public function isCallableMethodOf(Type $type, TypeContext $ctx):bool {
+        $val = $this->value;
+        if (is_string($val)) {
+            return $type->hasCallableMethod($val, $ctx);
+        } else {
+            return false;
+        }
+    }
+
+    public function hasCallableMethod(string $method, TypeContext $ctx):bool {
+        $val = $this->value;
+        if (is_string($val)) {
+            return $ctx->methodExistsNoRef($val, $method, true);
+        } else {
+            return false;
+        }
     }
 }
 
@@ -588,7 +645,7 @@ class Class_ extends ConcreteType {
 
     public function __construct(CodeLoc $loc, string $class) {
         parent::__construct($loc);
-        $this->class  = $class;
+        $this->class = $class;
     }
 
     public function toTypeHint() {
@@ -605,6 +662,10 @@ class Class_ extends ConcreteType {
 
     public function containsConcreteType(ConcreteType $type, TypeContext $ctx):bool {
         return $type->isClass($this->class, $ctx);
+    }
+
+    public function hasCallableMethod(string $method, TypeContext $ctx):bool {
+        return $ctx->methodExistsNoRef($this->class, $method, false);
     }
 }
 
@@ -649,7 +710,7 @@ class Shape extends ConcreteType {
      */
     public function __construct(CodeLoc $loc, array $keys = []) {
         parent::__construct($loc);
-        $this->keys   = $keys;
+        $this->keys = $keys;
     }
 
     public function get(string $key):Type {
@@ -657,8 +718,8 @@ class Shape extends ConcreteType {
             return $this->keys[$key];
         } else {
             // TODO Log error
-            // Could be anything
-            return new Mixed($this->loc());
+            // Can't be anything
+            return new Union($this->loc());
         }
     }
 
@@ -667,9 +728,10 @@ class Shape extends ConcreteType {
             isset($this->keys[0]) &&
             isset($this->keys[1])
         ) {
-            // TODO
+            return $this->keys[1]->isCallableMethodOf($this->keys[0], $ctx);
+        } else {
+            return false;
         }
-        return false;
     }
 
     public function all():Type {
@@ -739,171 +801,3 @@ class Shape extends ConcreteType {
     }
 }
 
-class Function_ extends PhpTypeChecker\Node {
-    /** @var Type */
-    private $returnType;
-    /** @var bool */
-    private $returnRef;
-    /** @var Param[] */
-    private $params = [];
-    /** @var bool */
-    private $variadic;
-
-    /**
-     * @param CodeLoc $loc
-     * @param Param[] $params
-     * @param Type    $returnType
-     * @param bool    $returnRef
-     * @param bool    $variadic
-     */
-    public function __construct(CodeLoc $loc, array $params, Type $returnType, bool $returnRef, bool $variadic) {
-        parent::__construct($loc);
-        $this->returnType = $returnType;
-        $this->returnRef  = $returnRef;
-        $this->params     = $params;
-        $this->variadic   = $variadic;
-    }
-
-    public function toString():string {
-        $params = [];
-        foreach ($this->params as $i => $param) {
-            $params[] = $param->toString();
-        }
-        return
-            ($this->returnRef ? '&' : '') .
-            '(' . join(', ', $params) . ($this->variadic ? ' ...' : '') . ')' .
-            ':' . $this->returnType->toString();
-    }
-
-    public function contains(Function_ $that, TypeContext $ctx):bool {
-        if (!$this->returnContains($that, $ctx)) {
-            return false;
-        }
-
-        $len = max(
-            count($this->params),
-            count($that->params)
-        );
-
-        for ($i = 0; $i < $len; $i++) {
-            if (!$this->paramContains($i, $that, $ctx)) {
-                return false;
-            }
-        }
-
-        // Handle a variadic parameter
-        if ($this->variadic || $that->variadic) {
-            // Not sure what to do besides this. Should do the trick.
-            if (!$this->paramContains(9999, $that, $ctx)) {
-                return false;
-            }
-        }
-
-        return true;
-    }
-
-    private function returnContains(self $that, TypeContext $ctx):bool {
-        if ($this->returnRef != $that->returnRef) {
-            // The functions must agree whether to return a reference or not
-            // [Dubious. Unlike by-ref parameters, by-ref returns don't have an effect on the called environment.]
-            return false;
-        }
-        if (!$this->returnType->containsType($that->returnType, $ctx)) {
-            return false;
-        }
-        return true;
-    }
-
-    private function paramContains(int $i, self $that, TypeContext $ctx):bool {
-        if ($this->acceptsParam($i) && !$that->acceptsParam($i)) {
-            // The function must be prepared to accept at least as many parameters as us
-            // [Dubious. Why shouldn't an overridden function be allowed to ignore some parameters?]
-            return false;
-        }
-        if ($this->isParamOptional($i) && !$that->isParamOptional($i)) {
-            // An optional parameter cannot be made required
-            return false;
-        }
-        if ($this->isParamRef($i) != $that->isParamRef($i)) {
-            // A by-ref parameter cannot be made by-val or vice versa, because by-ref params have an
-            // effect on the calling environment (they cause the variable to be assigned null).
-            return false;
-        }
-        if (!$that->paramType($i)->containsType($this->paramType($i), $ctx)) {
-            return false;
-        }
-        return true;
-    }
-
-    public function acceptsParam(int $i):bool {
-        return $this->variadic || isset($this->params[$i]);
-    }
-
-    public function isParamOptional(int $i):bool {
-        if ($this->variadic && $i == count($this->params) - 1) {
-            // The last parameter is always optional if this function is variadic
-            return true;
-        } else if (isset($this->params[$i])) {
-            return $this->params[$i]->isOptional();
-        } else {
-            // Any superfluous parameters are optional
-            return true;
-        }
-    }
-
-    public function paramType(int $i):Type {
-        if (isset($this->params[$i])) {
-            return $this->params[$i]->type();
-        } else if ($this->variadic && $this->params) {
-            return $this->params[count($this->params) - 1]->type();
-        } else {
-            // Any superfluous parameters accept nothing
-            return Type::none($this->loc());
-        }
-    }
-
-    public function isParamRef(int $i):bool {
-        if (isset($this->params[$i])) {
-            return $this->params[$i]->isRef();
-        } else if ($this->variadic && $this->params) {
-            return $this->params[count($this->params) - 1]->isRef();
-        } else {
-            // Any superfluous parameters are not passed by reference
-            return false;
-        }
-    }
-}
-
-class Param {
-    /** @var Type */
-    private $type;
-    /** @var bool */
-    private $ref;
-    /** @var bool */
-    private $optional;
-
-    public function __construct(Type $type, bool $ref, bool $optional) {
-        $this->type     = $type;
-        $this->ref      = $ref;
-        $this->optional = $optional;
-    }
-
-    public function isOptional():bool {
-        return $this->optional;
-    }
-
-    public function isRef():bool {
-        return $this->ref;
-    }
-
-    public function type():Type {
-        return $this->type;
-    }
-
-    public function toString():string {
-        return
-            $this->type->toString() . ' ' .
-            ($this->ref ? '&' : '') .
-            ($this->optional ? '?' : '');
-    }
-}

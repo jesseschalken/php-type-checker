@@ -2,7 +2,7 @@
 
 namespace JesseSchalken\PhpTypeChecker;
 
-use JesseSchalken\PhpTypeChecker\Definitions\GlobalDefinitions;
+use JesseSchalken\PhpTypeChecker\Decls\GlobalDecls;
 
 /**
  * @param \PhpParser\Node $node
@@ -59,7 +59,7 @@ function type_check(array $phpFiles):array {
         }
     };
     $files  = File::parse($phpFiles, $errors);
-    $defns  = new GlobalDefinitions();
+    $defns  = new GlobalDecls();
     foreach ($files as $file) {
         $file->gatherDefinitions($defns);
     }
