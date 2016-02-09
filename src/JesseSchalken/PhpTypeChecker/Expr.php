@@ -5,6 +5,7 @@ namespace JesseSchalken\PhpTypeChecker\Expr;
 use JesseSchalken\PhpTypeChecker\Type;
 use JesseSchalken\PhpTypeChecker\CodeLoc;
 use JesseSchalken\PhpTypeChecker\Node;
+use JesseSchalken\PhpTypeChecker\Function_;
 use JesseSchalken\PhpTypeChecker\Stmt;
 
 abstract class Expr extends Stmt\SingleStmt {
@@ -140,13 +141,13 @@ class ArrayItem extends Node {
      * @param CodeLoc   $loc
      * @param Expr|null $key
      * @param Expr      $value
-     * @param bool      $byRef
+     * @param bool      $byByRef
      */
-    public function __construct(CodeLoc $loc, Expr $key = null, Expr $value, bool $byRef) {
+    public function __construct(CodeLoc $loc, Expr $key = null, Expr $value, bool $byByRef) {
         parent::__construct($loc);
         $this->key   = $key;
         $this->value = $value;
-        $this->byRef = $byRef;
+        $this->byRef = $byByRef;
     }
 
     public function subStmts():array {
@@ -187,7 +188,7 @@ class Print_ extends Expr {
 class Closure extends Expr {
     /** @var bool */
     private $static;
-    /** @var Stmt\FunctionSignature */
+    /** @var Function_\Function_ */
     private $type;
     /** @var ClosureUse[] */
     private $uses;
@@ -195,16 +196,16 @@ class Closure extends Expr {
     private $body;
 
     /**
-     * @param CodeLoc                $loc
-     * @param bool                   $static
-     * @param Stmt\FunctionSignature $type
-     * @param ClosureUse[]           $uses
-     * @param Stmt\Block             $body
+     * @param CodeLoc             $loc
+     * @param bool                $static
+     * @param Function_\Function_ $type
+     * @param ClosureUse[]        $uses
+     * @param Stmt\Block          $body
      */
     public function __construct(
         CodeLoc $loc,
         bool $static,
-        Stmt\FunctionSignature $type,
+        Function_\Function_ $type,
         array $uses,
         Stmt\Block $body
     ) {

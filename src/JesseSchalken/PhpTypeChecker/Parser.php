@@ -7,7 +7,9 @@ use JesseSchalken\PhpTypeChecker\CodeLoc;
 use JesseSchalken\PhpTypeChecker\LValue;
 use JesseSchalken\PhpTypeChecker\Constants;
 use JesseSchalken\PhpTypeChecker\ErrorReceiver;
+use JesseSchalken\PhpTypeChecker\Defns;
 use JesseSchalken\PhpTypeChecker\Expr;
+use JesseSchalken\PhpTypeChecker\Function_;
 use JesseSchalken\PhpTypeChecker\Call;
 use function JesseSchalken\PhpTypeChecker\node_sub_nodes;
 use function JesseSchalken\PhpTypeChecker\normalize_constant;
@@ -493,7 +495,7 @@ final class Parser {
         } elseif ($node instanceof \PhpParser\Node\Stmt\Function_) {
             $name = $this->prefixName($node->name);
             $self = $this->withMagicConstants(null, null, $name);
-            return new Stmt\Function_(
+            return new Defns\FunctionDefinition(
                 $loc,
                 $name,
                 $self->parseFunctionType($node),
@@ -507,11 +509,11 @@ final class Parser {
             foreach ($node->extends as $extend) {
                 $extends[] = $self->resolveClass($extend)->toString();
             }
-            return new Stmt\Interface_($loc, $name, $extends, $self->parseClassMembers($node));
+            return new Defns\Interface_($loc, $name, $extends, $self->parseClassMembers($node));
         } elseif ($node instanceof \PhpParser\Node\Stmt\Trait_) {
             $name = $this->prefixName($node->name);
             $self = $this->withMagicConstants($name, null, null);
-            return new Stmt\Trait_($loc, $name, $self->parseClassMembers($node));
+            return new Defns\Trait_($loc, $name, $self->parseClassMembers($node));
         } elseif ($node instanceof \PhpParser\Node\Stmt\Use_) {
             $this->addUses($node->uses, $node->type);
             return new Stmt\Block($loc);
@@ -534,7 +536,7 @@ final class Parser {
         } elseif ($node instanceof \PhpParser\Node\Stmt\Const_) {
             $stmts = [];
             foreach ($node->consts as $const) {
-                $stmts[] = new Stmt\Const_(
+                $stmts[] = new Defns\Const_(
                     $this->locateNode($const),
                     $this->prefixName($const->name),
                     $this->parseExpr($const->value)
@@ -641,7 +643,7 @@ final class Parser {
 
     /**
      * @param \PhpParser\Node\Stmt\ClassLike $node
-     * @return Stmt\AbstractClassMember[]
+     * @return Defns\AbstractClassMember[]
      * @throws \Exception
      */
     private function parseClassMembers(\PhpParser\Node\Stmt\ClassLike $node):array {
@@ -654,7 +656,7 @@ final class Parser {
                     $this->parent,
                     $stmt->name
                 );
-                $stmts[] = new Stmt\Method_(
+                $stmts[] = new Defns\Method_(
                     $loc,
                     $stmt->name,
                     $self->parseFunctionType($stmt),
@@ -665,7 +667,7 @@ final class Parser {
                 );
             } else if ($stmt instanceof \PhpParser\Node\Stmt\ClassConst) {
                 foreach ($stmt->consts as $const) {
-                    $stmts[] = new Stmt\ClassConstant(
+                    $stmts[] = new Defns\ClassConstant(
                         $this->locateNode($stmt),
                         $const->name,
                         $this->parseExpr($const->value)
@@ -686,7 +688,7 @@ final class Parser {
                             );
                         }
                     }
-                    $stmts[] = new Stmt\Property(
+                    $stmts[] = new Defns\Property(
                         $this->locateNode($prop),
                         $prop->name,
                         $type ?: new Type\Mixed($loc),
@@ -700,7 +702,7 @@ final class Parser {
                 foreach ($stmt->traits as $trait) {
                     $traits[] = $this->resolveClass($trait)->toString();
                 }
-                $useTrait = new Stmt\UseTrait($loc, $traits);
+                $useTrait = new Defns\UseTrait($loc, $traits);
                 foreach ($stmt->adaptations as $adaption) {
                     if ($adaption instanceof \PhpParser\Node\Stmt\TraitUseAdaptation\Precedence) {
                         $insteadOf = [];
@@ -708,7 +710,7 @@ final class Parser {
                             $insteadOf[] = $this->resolveClass($name)->toString();
                         }
                         $useTrait->addInsteadOf(
-                            new Stmt\UseTraitInsteadof(
+                            new Defns\UseTraitInsteadof(
                                 $this->locateNode($adaption),
                                 $this->resolveClass($adaption->trait)->toString(),
                                 $adaption->method,
@@ -717,7 +719,7 @@ final class Parser {
                         );
                     } elseif ($adaption instanceof \PhpParser\Node\Stmt\TraitUseAdaptation\Alias) {
                         $useTrait->addAlias(
-                            new Stmt\UseTraitAlias(
+                            new Defns\UseTraitAlias(
                                 $this->locateNode($adaption),
                                 $adaption->newName !== null ? $adaption->newName : $adaption->method,
                                 $adaption->method,
@@ -741,13 +743,13 @@ final class Parser {
 
     private function parseVisibility(int $type):string {
         if ($type & \PhpParser\Node\Stmt\Class_::MODIFIER_PUBLIC) {
-            return Stmt\Visibility::PUBLIC;
+            return Defns\Visibility::PUBLIC;
         } else if ($type & \PhpParser\Node\Stmt\Class_::MODIFIER_PROTECTED) {
-            return Stmt\Visibility::PROTECTED;
+            return Defns\Visibility::PROTECTED;
         } else if ($type & \PhpParser\Node\Stmt\Class_::MODIFIER_PRIVATE) {
-            return Stmt\Visibility::PRIVATE;
+            return Defns\Visibility::PRIVATE;
         } else {
-            return Stmt\Visibility::PUBLIC;
+            return Defns\Visibility::PUBLIC;
         }
     }
 
@@ -870,7 +872,7 @@ final class Parser {
         }
     }
 
-    private function parseFunctionType(\PhpParser\Node\FunctionLike $node):Stmt\FunctionSignature {
+    private function parseFunctionType(\PhpParser\Node\FunctionLike $node):Function_\Function_ {
         $loc = $this->locateNode($node);
         /**
          * @var Type\Type[] $paramTypes
@@ -927,18 +929,19 @@ final class Parser {
             }
         }
 
-        $params = [];
+        $variadic = false;
+        $params   = [];
         foreach ($node->getParams() as $param) {
-            $params[] = new Stmt\FunctionParam(
+            $params[] = new Function_\Param(
                 $this->locateNode($param),
                 $param->name,
-                $paramDefaults[$param->name],
+                $paramTypes[$param->name],
                 $param->byRef,
-                $param->variadic,
-                $paramTypes[$param->name]
+                $paramDefaults[$param->name]
             );
+            $variadic = $variadic || $param->variadic;
         }
-        return new Stmt\FunctionSignature($loc, $node->returnsByRef(), $params, $returnType);
+        return new Function_\Function_($loc, $params, $returnType, $node->returnsByRef(), $variadic);
     }
 
     /**
@@ -1456,7 +1459,7 @@ final class Parser {
         return $result;
     }
 
-    private function parseClass(\PhpParser\Node\Stmt\Class_ $node, string $name = null):Stmt\Class_ {
+    private function parseClass(\PhpParser\Node\Stmt\Class_ $node, string $name = null):Defns\Class_ {
         $loc  = $this->locateNode($node);
         $name = $name ?: $this->prefixName($node->name);
 
@@ -1466,7 +1469,7 @@ final class Parser {
             $implements[] = $this->resolveClass($impl)->toString();
         }
 
-        return new Stmt\Class_(
+        return new Defns\Class_(
             $loc,
             $name,
             $this->withMagicConstants($name, $parent, null)->parseClassMembers($node),

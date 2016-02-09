@@ -21,15 +21,25 @@ class Function_ extends Node {
      * @param CodeLoc   $loc
      * @param Param[]   $params
      * @param Type\Type $returnType
-     * @param bool      $returnRef
+     * @param bool      $returnByRef
      * @param bool      $variadic
      */
-    public function __construct(CodeLoc $loc, array $params, Type\Type $returnType, bool $returnRef, bool $variadic) {
+    public function __construct(CodeLoc $loc, array $params, Type\Type $returnType, bool $returnByRef, bool $variadic) {
         parent::__construct($loc);
         $this->returnType = $returnType;
-        $this->returnRef  = $returnRef;
+        $this->returnRef  = $returnByRef;
         $this->params     = $params;
         $this->variadic   = $variadic;
+    }
+
+    public function subStmts():array {
+        $stmts = [];
+        foreach ($this->params as $param) {
+            foreach ($param->subStmts() as $stmt) {
+                $stmts[] = $stmt;
+            }
+        }
+        return $stmts;
     }
 
     public function toString(string $name):string {
@@ -133,13 +143,25 @@ class Function_ extends Node {
 
     public function isParamRef(int $i):bool {
         if (isset($this->params[$i])) {
-            return $this->params[$i]->isRef();
+            return $this->params[$i]->isByRef();
         } else if ($this->variadic && $this->params) {
-            return $this->params[count($this->params) - 1]->isRef();
+            return $this->params[count($this->params) - 1]->isByRef();
         } else {
             // Any superfluous parameters are not passed by reference
             return false;
         }
+    }
+
+    public function unparseAttributes():array {
+        $params = [];
+        foreach ($this->params as $k => $param) {
+            $params[] = $param->unparse($k == count($this->params) - 1 && $this->variadic);
+        }
+        return [
+            'byRef'      => $this->returnRef,
+            'params'     => $params,
+            'returnType' => $this->returnType->toTypeHint(),
+        ];
     }
 }
 
@@ -149,25 +171,30 @@ class Param extends Node {
     /** @var Type\Type */
     private $type;
     /** @var bool */
-    private $ref;
+    private $byRef;
     /** @var Expr\Expr|null */
     private $default = null;
 
-    public function __construct(CodeLoc $loc, string $name, Type\Type $type, bool $ref, Expr\Expr $default = null) {
+    public function __construct(CodeLoc $loc, string $name, Type\Type $type, bool $byRef, Expr\Expr $default = null) {
         parent::__construct($loc);
 
         $this->name    = $name;
         $this->type    = $type;
-        $this->ref     = $ref;
+        $this->byRef   = $byRef;
         $this->default = $default;
+    }
+
+    public function subStmts():array {
+        $default = $this->default;
+        return $default ? [$default] : [];
     }
 
     public function isOptional():bool {
         return $this->default !== null;
     }
 
-    public function isRef():bool {
-        return $this->ref;
+    public function isByRef():bool {
+        return $this->byRef;
     }
 
     public function type():Type\Type {
@@ -177,9 +204,19 @@ class Param extends Node {
     public function toString():string {
         return
             $this->type->toString() . ' ' .
-            ($this->ref ? '&' : '') .
+            ($this->byRef ? '&' : '') .
             '$' . $this->name .
             ($this->isOptional() ? '?' : '');
+    }
+
+    public function unparse(bool $variadic):\PhpParser\Node\Param {
+        return new \PhpParser\Node\Param(
+            $this->name,
+            $this->default ? $this->default->unparseExpr() : null,
+            $this->type->toTypeHint(),
+            $this->byRef,
+            $variadic
+        );
     }
 }
 
