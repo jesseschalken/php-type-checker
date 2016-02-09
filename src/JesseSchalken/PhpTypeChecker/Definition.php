@@ -7,6 +7,8 @@
  */
 namespace JesseSchalken\PhpTypeChecker\Defns;
 
+use function JesseSchalken\PhpTypeChecker\extract_namespace;
+
 abstract class Definition extends \JesseSchalken\PhpTypeChecker\Stmt\SingleStmt {
     public abstract function name():\JesseSchalken\PhpTypeChecker\Stmt\string;
 
