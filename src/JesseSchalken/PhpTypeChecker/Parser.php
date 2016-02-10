@@ -64,12 +64,8 @@ abstract class NamespaceUses {
         $this->defined   = $defined;
     }
 
-    public function getMap():array {
-        $map = [];
-        foreach ($this->uses as $k => $use) {
-            $map[$this->original[$k]] = $use->toString();
-        }
-        return $map;
+    public function getOriginalCaseMap():array {
+        return $this->original;
     }
 
     public final function resolve(\PhpParser\Node\Name $name, NamespaceUses $classes):\PhpParser\Node\Name {
@@ -104,8 +100,8 @@ abstract class NamespaceUses {
         $alias      = $alias ?: $name->getLast();
         $normalized = $this->normalize($alias);
 
-        $this->original[$normalized] = $alias;
-        $this->uses[$normalized]     = $name;
+        $this->original[$alias]  = $name->toString();
+        $this->uses[$normalized] = $name;
     }
 
     protected final function defined(\PhpParser\Node\Name $name):bool {
@@ -305,8 +301,8 @@ final class NamespaceContext {
         return $this->namespace->toString();
     }
 
-    public function getClassAliasMap():array {
-        return $this->useClass->getMap();
+    public function getClassAliasOriginalCaseMap():array {
+        return $this->useClass->getOriginalCaseMap();
     }
 
     public function resolveFunction(\PhpParser\Node\Name $name):string {
@@ -773,7 +769,7 @@ final class Parser {
     private function getDocBlockContext():\phpDocumentor\Reflection\DocBlock\Context {
         return new \phpDocumentor\Reflection\DocBlock\Context(
             $this->namespace->getNamespace(),
-            $this->namespace->getClassAliasMap()
+            $this->namespace->getClassAliasOriginalCaseMap()
         );
     }
 
