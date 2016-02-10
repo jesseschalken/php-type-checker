@@ -54,14 +54,14 @@ function type_check(array $phpFiles):array {
     $errors = new class () extends ErrorReceiver {
         public $errors = [];
 
-        public function add(string $message, CodeLoc $loc) {
-            $this->errors[] = $loc->format($message);
+        public function add(string $message, HasCodeLoc $loc) {
+            $this->errors[] = $loc->loc()->format($message);
         }
     };
     $files  = File::parse($phpFiles, $errors);
     $defns  = new GlobalDecls();
     foreach ($files as $file) {
-        $file->gatherDefinitions($defns);
+        $file->gatherGlobalDecls($defns);
     }
     foreach ($files as $file) {
         $file->typeCheck($defns, $errors);

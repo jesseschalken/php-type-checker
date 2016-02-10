@@ -190,6 +190,12 @@ class AnonymousNew extends Call {
         $this->class = $class;
     }
 
+    public function subStmts():array {
+        $stmts   = parent::subStmts();
+        $stmts[] = $this->class;
+        return $stmts;
+    }
+
     public function unparseExpr():\PhpParser\Node\Expr {
         return new \PhpParser\Node\Expr\New_(
             $this->class->unparseStmt(),

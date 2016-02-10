@@ -5,6 +5,7 @@ namespace JesseSchalken\PhpTypeChecker\Stmt;
 use JesseSchalken\PhpTypeChecker\CodeLoc;
 use JesseSchalken\PhpTypeChecker\Decls;
 use JesseSchalken\PhpTypeChecker\Defns;
+use JesseSchalken\PhpTypeChecker\ErrorReceiver;
 use JesseSchalken\PhpTypeChecker\Expr;
 use JesseSchalken\PhpTypeChecker\Node;
 use JesseSchalken\PhpTypeChecker\Parser;
@@ -24,6 +25,14 @@ abstract class Stmt extends Node {
      * @return Stmt[]
      */
     public abstract function subStmts():array;
+
+    /**
+     * Same as subStmts() but doesn't descend into class/function definitions
+     * @return Stmt[]
+     */
+    public function localSubStmts():array {
+        return $this->subStmts();
+    }
 
     public final function namespaces():array {
         $namespaces = [];
@@ -46,6 +55,24 @@ abstract class Stmt extends Node {
             }
         }
         return $decls;
+    }
+
+    public function gatherGlobalDecls(Decls\GlobalDecls $decls) {
+        foreach ($this->subStmts() as $stmt) {
+            $stmt->gatherGlobalDecls($decls);
+        }
+    }
+
+    public function gatherLocalDecls(Decls\LocalDecls $decls) {
+        foreach ($this->localSubStmts() as $stmt) {
+            $stmt->gatherLocalDecls($decls);
+        }
+    }
+
+    public function typeCheck(Decls\GlobalDecls $globals, Decls\LocalDecls $locals, ErrorReceiver $errors) {
+        foreach ($this->subStmts() as $stmt) {
+            $stmt->typeCheck($globals, $locals, $errors);
+        }
     }
 }
 

@@ -7,11 +7,15 @@ use JesseSchalken\PhpTypeChecker\Parser;
 use JesseSchalken\PhpTypeChecker\Stmt;
 use JesseSchalken\PhpTypeChecker\Type;
 
+interface HasCodeLoc {
+    public function loc():CodeLoc;
+}
+
 /**
  * A location in a source file, for error reporting. Statements, expressions, types etc all wrap a CodeLoc by extending
  * from Node. It may be changed from a position in a file to a range, if error reporting so requires.
  */
-class CodeLoc {
+class CodeLoc implements HasCodeLoc {
     /** @var string */
     private $path;
     /** @var int */
@@ -32,12 +36,16 @@ class CodeLoc {
     public function toDocBlockLocation() {
         return new \phpDocumentor\Reflection\DocBlock\Location($this->line, $this->column);
     }
+
+    public function loc():CodeLoc {
+        return $this;
+    }
 }
 
 /**
  * Base class for all things which can be tracked to some position in a source file.
  */
-abstract class Node {
+abstract class Node implements HasCodeLoc {
     /** @var CodeLoc */
     private $loc;
 
@@ -54,7 +62,29 @@ abstract class Node {
  * Something to throw errors at in the process of parsing and type checking.
  */
 abstract class ErrorReceiver {
-    public abstract function add(string $message, CodeLoc $loc);
+    /**
+     * @param string     $message
+     * @param HasCodeLoc $loc
+     */
+    public abstract function add(string $message, HasCodeLoc $loc);
+
+    public final function bind(HasCodeLoc $loc) {
+        return new class($this, $loc) extends ErrorReceiver {
+            /** @var ErrorReceiver */
+            private $self;
+            /** @var HasCodeLoc */
+            private $loc;
+
+            public function __construct(ErrorReceiver $self, HasCodeLoc $loc) {
+                $this->self = $self;
+                $this->loc  = $loc;
+            }
+
+            public function add(string $message, HasCodeLoc $loc) {
+                $this->self->add($message, $this->loc);
+            }
+        };
+    }
 }
 
 class File extends Node {
@@ -152,18 +182,22 @@ class File extends Node {
     }
 
     /**
-     * @param Decls\GlobalDecls $defns
+     * @param Decls\GlobalDecls $decls
      * @return void
      */
-    public function gatherDefinitions(Decls\GlobalDecls $defns) {
+    public function gatherGlobalDecls(Decls\GlobalDecls $decls) {
+        $this->contents->gatherGlobalDecls($decls);
     }
 
     /**
-     * @param Decls\GlobalDecls $defns
+     * @param Decls\GlobalDecls $globals
      * @param ErrorReceiver     $errors
      * @return void
      */
-    public function typeCheck(Decls\GlobalDecls $defns, ErrorReceiver $errors) {
+    public function typeCheck(Decls\GlobalDecls $globals, ErrorReceiver $errors) {
+        $locals = new Decls\LocalDecls();
+        $this->contents->gatherLocalDecls($locals);
+        $this->contents->typeCheck($globals, $locals, $errors);
     }
 }
 

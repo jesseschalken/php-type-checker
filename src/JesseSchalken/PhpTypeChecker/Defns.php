@@ -3,6 +3,7 @@
 namespace JesseSchalken\PhpTypeChecker\Defns;
 
 use JesseSchalken\PhpTypeChecker\CodeLoc;
+use JesseSchalken\PhpTypeChecker\Decls;
 use JesseSchalken\PhpTypeChecker\Expr;
 use JesseSchalken\PhpTypeChecker\Function_;
 use JesseSchalken\PhpTypeChecker\Node;
@@ -20,6 +21,10 @@ abstract class Definition extends Stmt\SingleStmt {
         $decls   = parent::findDefinitions();
         $decls[] = $this;
         return $decls;
+    }
+
+    public function localSubStmts():array {
+        return [];
     }
 }
 
@@ -41,6 +46,14 @@ abstract class VariableType extends Definition {
         $this->type = $type;
     }
 
+    public function name():string {
+        return $this->name;
+    }
+
+    public function type():Type\Type {
+        return $this->type;
+    }
+
     public function subStmts():array {
         return [];
     }
@@ -51,9 +64,17 @@ abstract class VariableType extends Definition {
 }
 
 class GlobalVariableType extends VariableType {
+    public function gatherGlobalDecls(Decls\GlobalDecls $decls) {
+        parent::gatherGlobalDecls($decls);
+        $decls->addGlobal($this->name(), $this->type());
+    }
 }
 
 class LocalVariableType extends VariableType {
+    public function gatherLocalDecls(Decls\LocalDecls $decls) {
+        parent::gatherLocalDecls($decls);
+        $decls->addLocal($this->name(), $this->type());
+    }
 }
 
 class Label_ extends LocalDefinition {
@@ -71,6 +92,11 @@ class Label_ extends LocalDefinition {
 
     public function unparseStmt() {
         return new \PhpParser\Node\Stmt\Label($this->name);
+    }
+
+    public function gatherLocalDecls(Decls\LocalDecls $decls) {
+        parent::gatherLocalDecls($decls);
+        $decls->addLabel($this->name);
     }
 }
 
@@ -118,12 +144,12 @@ class Const_ extends GlobalDefinition implements HasNamespace {
 class FunctionDefinition extends GlobalDefinition implements HasNamespace {
     /** @var string */
     private $name;
-    /** @var Stmt\Block|null */
+    /** @var Stmt\Block */
     private $body;
     /** @var Function_\Function_ */
     private $type;
 
-    public function __construct(CodeLoc $loc, string $name, Function_\Function_ $type, Stmt\Block $body = null) {
+    public function __construct(CodeLoc $loc, string $name, Function_\Function_ $type, Stmt\Block $body) {
         parent::__construct($loc);
         $this->name = $name;
         $this->type = $type;
@@ -135,10 +161,8 @@ class FunctionDefinition extends GlobalDefinition implements HasNamespace {
     }
 
     public function subStmts():array {
-        $stmts = $this->type->subStmts();
-        if ($this->body) {
-            $stmts[] = $this->body;
-        }
+        $stmts   = $this->type->subStmts();
+        $stmts[] = $this->body;
         return $stmts;
     }
 
@@ -148,7 +172,7 @@ class FunctionDefinition extends GlobalDefinition implements HasNamespace {
             array_replace(
                 $this->type->unparseAttributes(),
                 [
-                    'stmts' => $this->body ? $this->body->unparseNodes() : null,
+                    'stmts' => $this->body->unparseNodes(),
                 ]
             )
         );
@@ -156,6 +180,11 @@ class FunctionDefinition extends GlobalDefinition implements HasNamespace {
 
     public final function namespace_():string {
         return extract_namespace($this->name());
+    }
+
+    public function gatherGlobalDecls(Decls\GlobalDecls $decls) {
+        parent::gatherGlobalDecls($decls);
+        $decls->addFunction($this->name, $this->type);
     }
 }
 

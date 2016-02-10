@@ -63,8 +63,31 @@ class GlobalDecls {
     }
 }
 
+class LocalDecls {
+    /** @var bool[] */
+    private $labels = [];
+    /** @var Type\Type[] */
+    private $locals;
+
+    public function addLocal(string $name, Type\Type $type) {
+        $this->locals[$name] = $type;
+    }
+
+    public function addLabel(string $name) {
+        $this->labels[$name] = true;
+    }
+
+    public function hasLabel(string $name):bool {
+        return $this->labels[$name] ?? false;
+    }
+
+    public function getLocal(string $name) {
+        return $this->locals[$name] ?? null;
+    }
+}
+
 class ClassDecl {
-    /** @var ClassCOnstants */
+    /** @var ClassConstants */
     public $constants = [];
     /** @var ClassMethods */
     public $methods = [];

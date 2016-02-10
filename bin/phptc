@@ -58,8 +58,8 @@ s
         $contents[$path] = file_get_contents($path);
     }
     $files = File::parse($contents, new class() extends ErrorReceiver {
-        public function add(string $message, CodeLoc $loc) {
-            print $loc->format($message);
+        public function add(string $message, HasCodeLoc $loc) {
+            print $loc->loc()->format($message);
         }
     });
     if ($output) {

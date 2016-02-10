@@ -4,6 +4,7 @@ namespace JesseSchalken\PhpTypeChecker\Type;
 
 use JesseSchalken\PhpTypeChecker;
 use JesseSchalken\PhpTypeChecker\CodeLoc;
+use JesseSchalken\PhpTypeChecker\ErrorReceiver;
 use JesseSchalken\PhpTypeChecker\Expr;
 use function JesseSchalken\PhpTypeChecker\str_ieq;
 
@@ -21,7 +22,7 @@ interface TypeContext {
 
     public function functionExistsNoRef(string $name):bool;
 
-    public function methodExistsNoRef(string $class, string $method, bool $stiatc):bool;
+    public function methodExistsNoRef(string $class, string $method, bool $static):bool;
 }
 
 class DummyTypeContext implements TypeContext {
@@ -33,7 +34,7 @@ class DummyTypeContext implements TypeContext {
         return false;
     }
 
-    public function methodExistsNoRef(string $class, string $method, bool $stiatc):bool {
+    public function methodExistsNoRef(string $class, string $method, bool $static):bool {
         return false;
     }
 }
@@ -150,6 +151,41 @@ abstract class Type extends PhpTypeChecker\Node {
     public function hasCallableMethod(string $method, TypeContext $ctx):bool {
         return false;
     }
+
+    /**
+     * @param TypeContext   $ctx
+     * @param ErrorReceiver $errors
+     * @return array|\string[]
+     */
+    public final function asString(TypeContext $ctx, ErrorReceiver $errors) {
+        if (!$this->canCastToString($ctx)) {
+            $errors->add("Cannot cast {$this->toString()} to string", $this);
+        }
+        return $this->asString_($ctx);
+    }
+
+    public function asString_(TypeContext $ctx) {
+        return [null];
+    }
+
+    public function canCastToString(TypeContext $ctx):bool {
+        return false;
+    }
+
+    public function canUseAsArrayKey():bool {
+        return false;
+    }
+
+    public final function asArrayKey(ErrorReceiver $errors):array {
+        if (!$this->canUseAsArrayKey()) {
+            $errors->add("Cannot use {$this->toString()} as array key", $this);
+        }
+        return $this->asArrayKey_();
+    }
+
+    public function asArrayKey_():array {
+        return [null];
+    }
 }
 
 final class Union extends Type {
@@ -247,6 +283,23 @@ final class Union extends Type {
     public function hasCallableMethod(string $method, TypeContext $ctx):bool {
         foreach ($this->types as $t) {
             if (!$t->hasCallableMethod($method, $ctx)) {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    public function asString_(TypeContext $ctx):array {
+        $strings = [];
+        foreach ($this->types as $t) {
+            $strings = array_merge($strings, $t->asString_($ctx));
+        }
+        return $strings;
+    }
+
+    public function canCastToString(TypeContext $ctx):bool {
+        foreach ($this->types as $t) {
+            if (!$t->canCastToString($ctx)) {
                 return false;
             }
         }
@@ -414,6 +467,14 @@ class TypeVar extends SingleType {
     public function hasCallableMethod(string $method, TypeContext $ctx):bool {
         return $this->type->hasCallableMethod($method, $ctx);
     }
+
+    public function asString_(TypeContext $ctx):array {
+        return $this->type->asString_($ctx);
+    }
+
+    public function canCastToString(TypeContext $ctx):bool {
+        return $this->type->canCastToString($ctx);
+    }
 }
 
 class Mixed extends ConcreteType {
@@ -529,6 +590,34 @@ class SingleValue extends ConcreteType {
             return false;
         }
     }
+
+    public function canCastToString(TypeContext $ctx):bool {
+        return true;
+    }
+
+    public function asString_(TypeContext $ctx, ErrorReceiver $errors):array {
+        return ["$this->value"];
+    }
+
+    public function canUseAsArrayKey():bool {
+        return parent::canUseAsArrayKey();
+    }
+
+    public function asArrayKey_():array {
+        $value = $this->value;
+        switch (true) {
+            case is_float($value);
+            /** @noinspection PhpMissingBreakStatementInspection */
+            case is_bool($value);
+                $value = (int)$value;
+            case is_string($value):
+            case is_int($value):
+            case is_null($value):
+                return ["$value"];
+            default:
+                return parent::asArrayKey_();
+        }
+    }
 }
 
 /**
@@ -569,6 +658,15 @@ class Float_ extends ConcreteType {
     public function containsConcreteType(ConcreteType $type, TypeContext $ctx):bool {
         return $type->isFloat();
     }
+
+    public function canCastToString(TypeContext $ctx):bool {
+        return true;
+    }
+
+    public function canUseAsArrayKey():bool {
+        // TODO Floats get destructively truncated to ints when used as an array key. Maybe we should disallow it?
+        return true;
+    }
 }
 
 class String_ extends ConcreteType {
@@ -587,6 +685,14 @@ class String_ extends ConcreteType {
     public function containsConcreteType(ConcreteType $type, TypeContext $ctx):bool {
         return $type->isString();
     }
+
+    public function canCastToString(TypeContext $ctx):bool {
+        return true;
+    }
+
+    public function canUseAsArrayKey():bool {
+        return true;
+    }
 }
 
 class Int_ extends ConcreteType {
@@ -604,6 +710,14 @@ class Int_ extends ConcreteType {
 
     public function containsConcreteType(ConcreteType $type, TypeContext $ctx):bool {
         return $type->isInt();
+    }
+
+    public function canCastToString(TypeContext $ctx):bool {
+        return true;
+    }
+
+    public function canUseAsArrayKey():bool {
+        return true;
     }
 }
 
@@ -637,6 +751,15 @@ class Resource extends ConcreteType {
     public function containsConcreteType(ConcreteType $type, TypeContext $ctx):bool {
         return $type->isResource();
     }
+
+    public function canCastToString(TypeContext $ctx):bool {
+        return true;
+    }
+
+    public function canUseAsArrayKey():bool {
+        // TODO Resources get converted to int when used as an array key. Maybe we should disallow it?
+        return true;
+    }
 }
 
 class Class_ extends ConcreteType {
@@ -666,6 +789,10 @@ class Class_ extends ConcreteType {
 
     public function hasCallableMethod(string $method, TypeContext $ctx):bool {
         return $ctx->methodExistsNoRef($this->class, $method, false);
+    }
+
+    public function canCastToString(TypeContext $ctx):bool {
+        return $ctx->methodExistsNoRef($this->class, '__toString', false);
     }
 }
 

@@ -3,6 +3,8 @@
 namespace JesseSchalken\PhpTypeChecker\Expr;
 
 use JesseSchalken\PhpTypeChecker\CodeLoc;
+use JesseSchalken\PhpTypeChecker\Decls;
+use JesseSchalken\PhpTypeChecker\ErrorReceiver;
 use JesseSchalken\PhpTypeChecker\Function_;
 use JesseSchalken\PhpTypeChecker\Node;
 use JesseSchalken\PhpTypeChecker\Stmt;
@@ -32,6 +34,8 @@ abstract class Expr extends Stmt\SingleStmt {
     public function unparseExprOrString() {
         return $this->unparseExpr();
     }
+
+    public abstract function getType(Decls\LocalDecls $locals, Decls\GlobalDecls $globals, ErrorReceiver $errors):Type\Type;
 }
 
 class Yield_ extends Expr {
@@ -62,6 +66,10 @@ class Yield_ extends Expr {
             $this->val ? $this->val->unparseExpr() : null,
             $this->key ? $this->key->unparseExpr() : null
         );
+    }
+
+    public function getType(Decls\LocalDecls $locals, Decls\GlobalDecls $globals, ErrorReceiver $errors):Type\Type {
+        return new Type\Mixed($this->loc());
     }
 }
 
@@ -95,6 +103,10 @@ class Include_ extends Expr {
 
         return new \PhpParser\Node\Expr\Include_($this->expr->unparseExpr(), $type);
     }
+
+    public function getType(Decls\LocalDecls $locals, Decls\GlobalDecls $globals, ErrorReceiver $errors):Type\Type {
+        return new Type\Mixed($this->loc());
+    }
 }
 
 class Array_ extends Expr {
@@ -127,6 +139,20 @@ class Array_ extends Expr {
         }
         return new \PhpParser\Node\Expr\Array_($items);
     }
+
+    public function getType(Decls\LocalDecls $locals, Decls\GlobalDecls $globals, ErrorReceiver $errors):Type\Type {
+        $loc   = $this->loc();
+        $shape = true;
+        $types = [];
+        foreach ($this->items as $item) {
+        }
+
+        if ($shape) {
+            return new Type\Shape($loc, $types);
+        } else {
+            return Type\Type::union($loc, $types);
+        }
+    }
 }
 
 class ArrayItem extends Node {
@@ -156,6 +182,17 @@ class ArrayItem extends Node {
             $stmts[] = $this->key;
         }
         return $stmts;
+    }
+
+    /**
+     * @return Expr|null
+     */
+    public function key() {
+        return $this->key;
+    }
+
+    public function value():Expr {
+        return $this->value;
     }
 
     public function unparse():\PhpParser\Node\Expr\ArrayItem {
@@ -220,6 +257,10 @@ class Closure extends Expr {
         $stmts = [$this->body];
         $stmts = array_merge($stmts, $this->type->subStmts());
         return $stmts;
+    }
+
+    public function localSubStmts():array {
+        return $this->type->subStmts();
     }
 
     public function unparseExpr():\PhpParser\Node\Expr {
