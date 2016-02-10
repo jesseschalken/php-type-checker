@@ -2,20 +2,24 @@
 
 namespace JesseSchalken\PhpTypeChecker\Call;
 
-use JesseSchalken\PhpTypeChecker\CodeLoc;
+use JesseSchalken\PhpTypeChecker\ErrorReceiver;
+use JesseSchalken\PhpTypeChecker\HasCodeLoc;
 use JesseSchalken\PhpTypeChecker\Defns\Class_;
 use JesseSchalken\PhpTypeChecker\Expr\Expr;
 use JesseSchalken\PhpTypeChecker\Node;
+use JesseSchalken\PhpTypeChecker\Type;
+use JesseSchalken\PhpTypeChecker\Decls;
+use JesseSchalken\PhpTypeChecker\Defns;
 
 abstract class Call extends Expr {
     /** @var CallArg[] */
     private $args = [];
 
     /**
-     * @param CodeLoc   $loc
+     * @param HasCodeLoc   $loc
      * @param CallArg[] $args
      */
-    public function __construct(CodeLoc $loc, array $args) {
+    public function __construct(HasCodeLoc $loc, array $args) {
         parent::__construct($loc);
         $this->args = $args;
     }
@@ -42,11 +46,11 @@ class FunctionCall extends Call {
     private $function;
 
     /**
-     * @param CodeLoc   $loc
+     * @param HasCodeLoc   $loc
      * @param Expr      $function
      * @param CallArg[] $args
      */
-    public function __construct(CodeLoc $loc, Expr $function, array $args) {
+    public function __construct(HasCodeLoc $loc, Expr $function, array $args) {
         parent::__construct($loc, $args);
         $this->function = $function;
     }
@@ -61,6 +65,10 @@ class FunctionCall extends Call {
             $this->unparseArgs()
         );
     }
+
+    public function getType(Decls\LocalDecls $locals, Decls\GlobalDecls $globals, ErrorReceiver $errors):Type\Type {
+        // TODO: Implement getType() method.
+    }
 }
 
 class StaticMethodCall extends Call {
@@ -70,12 +78,12 @@ class StaticMethodCall extends Call {
     private $method;
 
     /**
-     * @param CodeLoc   $loc
+     * @param HasCodeLoc   $loc
      * @param CallArg[] $args
      * @param Expr      $class
      * @param Expr      $method
      */
-    public function __construct(CodeLoc $loc, array $args, Expr $class, Expr $method) {
+    public function __construct(HasCodeLoc $loc, array $args, Expr $class, Expr $method) {
         parent::__construct($loc, $args);
         $this->class  = $class;
         $this->method = $method;
@@ -92,6 +100,10 @@ class StaticMethodCall extends Call {
             $this->unparseArgs()
         );
     }
+
+    public function getType(Decls\LocalDecls $locals, Decls\GlobalDecls $globals, ErrorReceiver $errors):Type\Type {
+        // TODO: Implement getType() method.
+    }
 }
 
 class MethodCall extends Call {
@@ -101,12 +113,12 @@ class MethodCall extends Call {
     private $method;
 
     /**
-     * @param CodeLoc   $loc
+     * @param HasCodeLoc   $loc
      * @param CallArg[] $args
      * @param Expr      $object
      * @param Expr      $method
      */
-    public function __construct(CodeLoc $loc, array $args, Expr $object, Expr $method) {
+    public function __construct(HasCodeLoc $loc, array $args, Expr $object, Expr $method) {
         parent::__construct($loc, $args);
         $this->object = $object;
         $this->method = $method;
@@ -123,6 +135,10 @@ class MethodCall extends Call {
             $this->unparseArgs()
         );
     }
+
+    public function getType(Decls\LocalDecls $locals, Decls\GlobalDecls $globals, ErrorReceiver $errors):Type\Type {
+        // TODO: Implement getType() method.
+    }
 }
 
 class CallArg extends Node {
@@ -133,7 +149,7 @@ class CallArg extends Node {
     /** @var bool */
     private $splat = false;
 
-    public function __construct(CodeLoc $loc, Expr $expr, bool $byRef, bool $splat) {
+    public function __construct(HasCodeLoc $loc, Expr $expr, bool $byRef, bool $splat) {
         parent::__construct($loc);
         $this->expr  = $expr;
         $this->byRef = $byRef;
@@ -158,11 +174,11 @@ class New_ extends Call {
     private $class;
 
     /**
-     * @param CodeLoc   $loc
+     * @param HasCodeLoc   $loc
      * @param Expr      $class
      * @param CallArg[] $args
      */
-    public function __construct(CodeLoc $loc, Expr $class, array $args) {
+    public function __construct(HasCodeLoc $loc, Expr $class, array $args) {
         parent::__construct($loc, $args);
         $this->class = $class;
     }
@@ -179,13 +195,17 @@ class New_ extends Call {
             $this->unparseArgs()
         );
     }
+
+    public function getType(Decls\LocalDecls $locals, Decls\GlobalDecls $globals, ErrorReceiver $errors):Type\Type {
+        // TODO: Implement getType() method.
+    }
 }
 
 class AnonymousNew extends Call {
     /** @var Class_ */
     private $class;
 
-    public function __construct(CodeLoc $loc, Class_ $class, array $args) {
+    public function __construct(HasCodeLoc $loc, Class_ $class, array $args) {
         parent::__construct($loc, $args);
         $this->class = $class;
     }
@@ -201,6 +221,10 @@ class AnonymousNew extends Call {
             $this->class->unparseStmt(),
             $this->unparseArgs()
         );
+    }
+
+    public function getType(Decls\LocalDecls $locals, Decls\GlobalDecls $globals, ErrorReceiver $errors):Type\Type {
+        // TODO: Implement getType() method.
     }
 }
 

@@ -3,7 +3,7 @@
 namespace JesseSchalken\PhpTypeChecker\Type;
 
 use JesseSchalken\PhpTypeChecker;
-use JesseSchalken\PhpTypeChecker\CodeLoc;
+use JesseSchalken\PhpTypeChecker\HasCodeLoc;
 use JesseSchalken\PhpTypeChecker\ErrorReceiver;
 use JesseSchalken\PhpTypeChecker\Expr;
 use function JesseSchalken\PhpTypeChecker\str_ieq;
@@ -40,7 +40,19 @@ class DummyTypeContext implements TypeContext {
 }
 
 abstract class Type extends PhpTypeChecker\Node {
-    public final static function union(CodeLoc $loc, array $types):self {
+    public final static function falsy(HasCodeLoc $loc):self {
+        return self::union($loc, [
+            new SingleValue($loc, ''),
+            new SingleValue($loc, '0'),
+            new SingleValue($loc, 0),
+            new SingleValue($loc, 0.0),
+            new SingleValue($loc, false),
+            new SingleValue($loc, null),
+            new Shape($loc, []),
+        ]);
+    }
+
+    public final static function union(HasCodeLoc $loc, array $types):self {
         $union = new Union($loc);
         foreach ($types as $type) {
             $union = $union->addType($type, new DummyTypeContext());
@@ -48,7 +60,7 @@ abstract class Type extends PhpTypeChecker\Node {
         return $union;
     }
 
-    public final static function scalar(CodeLoc $loc):self {
+    public final static function scalar(HasCodeLoc $loc):self {
         return self::union(
             $loc, [
                 new Int_($loc),
@@ -60,7 +72,7 @@ abstract class Type extends PhpTypeChecker\Node {
         );
     }
 
-    public final static function number(CodeLoc $loc):self {
+    public final static function number(HasCodeLoc $loc):self {
         return self::union(
             $loc, [
                 new Int_($loc),
@@ -69,7 +81,7 @@ abstract class Type extends PhpTypeChecker\Node {
         );
     }
 
-    public final static function bool(CodeLoc $loc):self {
+    public final static function bool(HasCodeLoc $loc):self {
         return self::union(
             $loc, [
                 new SingleValue($loc, true),
@@ -78,12 +90,20 @@ abstract class Type extends PhpTypeChecker\Node {
         );
     }
 
-    public final static function null(CodeLoc $loc):self {
+    public final static function null(HasCodeLoc $loc):self {
         return new SingleValue($loc, null);
     }
 
-    public final static function none(CodeLoc $loc):self {
+    public final static function none(HasCodeLoc $loc):self {
         return new Union($loc);
+    }
+
+    public final function removeFalsy(TypeContext $ctx):self {
+        return $this->subtractType(self::falsy($this), $ctx);
+    }
+
+    public final function removeNull(TypeContext $ctx):self {
+        return $this->subtractType(new SingleValue($this, null), $ctx);
     }
 
     /**
@@ -176,6 +196,10 @@ abstract class Type extends PhpTypeChecker\Node {
         return false;
     }
 
+    /**
+     * @param ErrorReceiver $errors
+     * @return string[]
+     */
     public final function asArrayKey(ErrorReceiver $errors):array {
         if (!$this->canUseAsArrayKey()) {
             $errors->add("Cannot use {$this->toString()} as array key", $this);
@@ -421,7 +445,7 @@ class TypeVar extends SingleType {
      */
     private $type;
 
-    public function __construct(CodeLoc $loc, string $var, Type $type) {
+    public function __construct(HasCodeLoc $loc, string $var, Type $type) {
         parent::__construct($loc);
         $this->var  = $var;
         $this->type = $type;
@@ -492,10 +516,10 @@ class SingleValue extends ConcreteType {
     private $value;
 
     /**
-     * @param CodeLoc                    $loc
+     * @param HasCodeLoc                    $loc
      * @param int|string|float|bool|null $value
      */
-    public function __construct(CodeLoc $loc, $value) {
+    public function __construct(HasCodeLoc $loc, $value) {
         parent::__construct($loc);
         $this->value = $value;
     }
@@ -766,7 +790,7 @@ class Class_ extends ConcreteType {
     /** @var string */
     private $class;
 
-    public function __construct(CodeLoc $loc, string $class) {
+    public function __construct(HasCodeLoc $loc, string $class) {
         parent::__construct($loc);
         $this->class = $class;
     }
@@ -800,7 +824,7 @@ class Array_ extends ConcreteType {
     /** @var Type */
     private $inner;
 
-    public function __construct(CodeLoc $loc, Type $inner) {
+    public function __construct(HasCodeLoc $loc, Type $inner) {
         parent::__construct($loc);
         $this->inner = $inner;
     }
@@ -832,10 +856,10 @@ class Shape extends ConcreteType {
     private $keys = [];
 
     /**
-     * @param CodeLoc $loc
+     * @param HasCodeLoc $loc
      * @param Type[]  $keys
      */
-    public function __construct(CodeLoc $loc, array $keys = []) {
+    public function __construct(HasCodeLoc $loc, array $keys = []) {
         parent::__construct($loc);
         $this->keys = $keys;
     }

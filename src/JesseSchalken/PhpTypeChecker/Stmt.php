@@ -2,7 +2,7 @@
 
 namespace JesseSchalken\PhpTypeChecker\Stmt;
 
-use JesseSchalken\PhpTypeChecker\CodeLoc;
+use JesseSchalken\PhpTypeChecker\HasCodeLoc;
 use JesseSchalken\PhpTypeChecker\Decls;
 use JesseSchalken\PhpTypeChecker\Defns;
 use JesseSchalken\PhpTypeChecker\ErrorReceiver;
@@ -81,10 +81,10 @@ class Block extends Stmt {
     private $stmts;
 
     /**
-     * @param CodeLoc      $loc
+     * @param HasCodeLoc      $loc
      * @param SingleStmt[] $stmts
      */
-    public function __construct(CodeLoc $loc, array $stmts = []) {
+    public function __construct(HasCodeLoc $loc, array $stmts = []) {
         parent::__construct($loc);
         $this->stmts = $stmts;
     }
@@ -191,7 +191,7 @@ class Return_ extends SingleStmt {
     /** @var Expr\Expr|null */
     private $expr;
 
-    public function __construct(CodeLoc $loc, Expr\Expr $expr = null) {
+    public function __construct(HasCodeLoc $loc, Expr\Expr $expr = null) {
         parent::__construct($loc);
         $this->expr = $expr;
     }
@@ -209,7 +209,7 @@ class InlineHTML extends SingleStmt {
     /** @var string */
     private $html;
 
-    public function __construct(CodeLoc $loc, string $html) {
+    public function __construct(HasCodeLoc $loc, string $html) {
         parent::__construct($loc);
         $this->html = $html;
     }
@@ -228,10 +228,10 @@ class Echo_ extends SingleStmt {
     private $exprs;
 
     /**
-     * @param CodeLoc     $loc
+     * @param HasCodeLoc     $loc
      * @param Expr\Expr[] $exprs
      */
-    public function __construct(CodeLoc $loc, array $exprs) {
+    public function __construct(HasCodeLoc $loc, array $exprs) {
         parent::__construct($loc);
         $this->exprs = $exprs;
     }
@@ -254,10 +254,10 @@ class Throw_ extends SingleStmt {
     private $expr;
 
     /**
-     * @param CodeLoc   $loc
+     * @param HasCodeLoc   $loc
      * @param Expr\Expr $expr
      */
-    public function __construct(CodeLoc $loc, Expr\Expr $expr) {
+    public function __construct(HasCodeLoc $loc, Expr\Expr $expr) {
         parent::__construct($loc);
         $this->expr = $expr;
     }
@@ -280,11 +280,11 @@ class StaticVar extends SingleStmt {
     private $value;
 
     /**
-     * @param CodeLoc        $loc
+     * @param HasCodeLoc        $loc
      * @param string         $name
      * @param Expr\Expr|null $value
      */
-    public function __construct(CodeLoc $loc, string $name, Expr\Expr $value = null) {
+    public function __construct(HasCodeLoc $loc, string $name, Expr\Expr $value = null) {
         parent::__construct($loc);
         $this->name  = $name;
         $this->value = $value;
@@ -311,10 +311,10 @@ class Break_ extends SingleStmt {
     private $levels;
 
     /**
-     * @param CodeLoc $loc
+     * @param HasCodeLoc $loc
      * @param int     $levels
      */
-    public function __construct(CodeLoc $loc, int $levels = 1) {
+    public function __construct(HasCodeLoc $loc, int $levels = 1) {
         parent::__construct($loc);
         $this->levels = $levels;
     }
@@ -336,10 +336,10 @@ class Continue_ extends SingleStmt {
     private $levels;
 
     /**
-     * @param CodeLoc $loc
+     * @param HasCodeLoc $loc
      * @param int     $levels
      */
-    public function __construct(CodeLoc $loc, int $levels) {
+    public function __construct(HasCodeLoc $loc, int $levels) {
         parent::__construct($loc);
         $this->levels = $levels;
     }
@@ -361,10 +361,10 @@ class Unset_ extends SingleStmt {
     private $exprs;
 
     /**
-     * @param CodeLoc     $loc
+     * @param HasCodeLoc     $loc
      * @param Expr\Expr[] $exprs
      */
-    public function __construct(CodeLoc $loc, array $exprs) {
+    public function __construct(HasCodeLoc $loc, array $exprs) {
         parent::__construct($loc);
         $this->exprs = $exprs;
     }
@@ -387,10 +387,10 @@ class Global_ extends SingleStmt {
     private $expr;
 
     /**
-     * @param CodeLoc   $loc
+     * @param HasCodeLoc   $loc
      * @param Expr\Expr $expr
      */
-    public function __construct(CodeLoc $loc, Expr\Expr $expr) {
+    public function __construct(HasCodeLoc $loc, Expr\Expr $expr) {
         parent::__construct($loc);
         $this->expr = $expr;
     }
@@ -412,7 +412,7 @@ class Goto_ extends SingleStmt {
     /** @var string */
     private $name;
 
-    public function __construct(CodeLoc $loc, string $name) {
+    public function __construct(HasCodeLoc $loc, string $name) {
         parent::__construct($loc);
         $this->name = $name;
     }

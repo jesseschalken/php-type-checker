@@ -46,11 +46,11 @@ class CodeLoc implements HasCodeLoc {
  * Base class for all things which can be tracked to some position in a source file.
  */
 abstract class Node implements HasCodeLoc {
-    /** @var CodeLoc */
+    /** @var HasCodeLoc */
     private $loc;
 
-    public function __construct(CodeLoc $loc) {
-        $this->loc = $loc;
+    public function __construct(HasCodeLoc $loc) {
+        $this->loc = $loc->loc();
     }
 
     public final function loc():CodeLoc {
@@ -68,7 +68,13 @@ abstract class ErrorReceiver {
      */
     public abstract function add(string $message, HasCodeLoc $loc);
 
-    public final function bind(HasCodeLoc $loc) {
+    /**
+     * Returns an error receiver which reports errors against the given location instead of the one given when
+     * add() is called.
+     * @param HasCodeLoc $loc
+     * @return self
+     */
+    public final function bind(HasCodeLoc $loc):self {
         return new class($this, $loc) extends ErrorReceiver {
             /** @var ErrorReceiver */
             private $self;
@@ -110,7 +116,7 @@ class File extends Node {
             $self           = new self($file->nullLoc());
             $self->path     = $file->path;
             $self->shebang  = $file->shebang;
-            $self->contents = (new Parser\Parser($file, $defined, $errors))->parseStmts($self->loc(), $file->nodes);
+            $self->contents = (new Parser\Parser($file, $defined, $errors))->parseStmts($self, $file->nodes);
             $result[]       = $self;
         }
         return $result;

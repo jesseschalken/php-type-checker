@@ -2,7 +2,7 @@
 
 namespace JesseSchalken\PhpTypeChecker\Function_;
 
-use JesseSchalken\PhpTypeChecker\CodeLoc;
+use JesseSchalken\PhpTypeChecker\HasCodeLoc;
 use JesseSchalken\PhpTypeChecker\Expr;
 use JesseSchalken\PhpTypeChecker\Node;
 use JesseSchalken\PhpTypeChecker\Type;
@@ -18,13 +18,13 @@ class Function_ extends Node {
     private $variadic;
 
     /**
-     * @param CodeLoc   $loc
+     * @param HasCodeLoc   $loc
      * @param Param[]   $params
      * @param Type\Type $returnType
      * @param bool      $returnByRef
      * @param bool      $variadic
      */
-    public function __construct(CodeLoc $loc, array $params, Type\Type $returnType, bool $returnByRef, bool $variadic) {
+    public function __construct(HasCodeLoc $loc, array $params, Type\Type $returnType, bool $returnByRef, bool $variadic) {
         parent::__construct($loc);
         $this->returnType = $returnType;
         $this->returnRef  = $returnByRef;
@@ -175,7 +175,7 @@ class Param extends Node {
     /** @var Expr\Expr|null */
     private $default = null;
 
-    public function __construct(CodeLoc $loc, string $name, Type\Type $type, bool $byRef, Expr\Expr $default = null) {
+    public function __construct(HasCodeLoc $loc, string $name, Type\Type $type, bool $byRef, Expr\Expr $default = null) {
         parent::__construct($loc);
 
         $this->name    = $name;

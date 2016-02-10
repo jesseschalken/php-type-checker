@@ -2,7 +2,7 @@
 
 namespace JesseSchalken\PhpTypeChecker\Defns;
 
-use JesseSchalken\PhpTypeChecker\CodeLoc;
+use JesseSchalken\PhpTypeChecker\HasCodeLoc;
 use JesseSchalken\PhpTypeChecker\Decls;
 use JesseSchalken\PhpTypeChecker\Expr;
 use JesseSchalken\PhpTypeChecker\Function_;
@@ -40,7 +40,7 @@ abstract class VariableType extends Definition {
     /** @var Type\Type */
     private $type;
 
-    public function __construct(CodeLoc $loc, string $name, Type\Type $type) {
+    public function __construct(HasCodeLoc $loc, string $name, Type\Type $type) {
         parent::__construct($loc);
         $this->name = $name;
         $this->type = $type;
@@ -81,7 +81,7 @@ class Label_ extends LocalDefinition {
     /** @var string */
     private $name;
 
-    public function __construct(CodeLoc $loc, string $name) {
+    public function __construct(HasCodeLoc $loc, string $name) {
         parent::__construct($loc);
         $this->name = $name;
     }
@@ -107,11 +107,11 @@ class Const_ extends GlobalDefinition implements HasNamespace {
     private $value;
 
     /**
-     * @param CodeLoc   $loc
+     * @param HasCodeLoc   $loc
      * @param string    $name
      * @param Expr\Expr $value
      */
-    public function __construct(CodeLoc $loc, string $name, Expr\Expr $value) {
+    public function __construct(HasCodeLoc $loc, string $name, Expr\Expr $value) {
         parent::__construct($loc);
         $this->name  = $name;
         $this->value = $value;
@@ -139,6 +139,11 @@ class Const_ extends GlobalDefinition implements HasNamespace {
     public final function namespace_():string {
         return extract_namespace($this->name());
     }
+
+    public function gatherGlobalDecls(Decls\GlobalDecls $decls) {
+        parent::gatherGlobalDecls($decls);
+        $decls->addConstant($this->name, $this->value);
+    }
 }
 
 class FunctionDefinition extends GlobalDefinition implements HasNamespace {
@@ -149,7 +154,7 @@ class FunctionDefinition extends GlobalDefinition implements HasNamespace {
     /** @var Function_\Function_ */
     private $type;
 
-    public function __construct(CodeLoc $loc, string $name, Function_\Function_ $type, Stmt\Block $body) {
+    public function __construct(HasCodeLoc $loc, string $name, Function_\Function_ $type, Stmt\Block $body) {
         parent::__construct($loc);
         $this->name = $name;
         $this->type = $type;
@@ -191,7 +196,7 @@ class FunctionDefinition extends GlobalDefinition implements HasNamespace {
 abstract class Classish extends GlobalDefinition implements HasNamespace {
     private $name;
 
-    public function __construct(CodeLoc $loc, string $name) {
+    public function __construct(HasCodeLoc $loc, string $name) {
         parent::__construct($loc);
         $this->name = $name;
     }
@@ -240,11 +245,11 @@ class Trait_ extends Classish {
     private $members = [];
 
     /**
-     * @param CodeLoc       $loc
+     * @param HasCodeLoc       $loc
      * @param string        $name
      * @param ClassMember[] $members
      */
-    public function __construct(CodeLoc $loc, string $name, array $members) {
+    public function __construct(HasCodeLoc $loc, string $name, array $members) {
         parent::__construct($loc, $name);
         $this->members = $members;
     }
@@ -274,7 +279,7 @@ class Class_ extends Classish {
     private $final;
 
     /**
-     * @param CodeLoc       $loc
+     * @param HasCodeLoc       $loc
      * @param string        $name
      * @param ClassMember[] $members
      * @param string|null   $parent
@@ -283,7 +288,7 @@ class Class_ extends Classish {
      * @param bool          $final
      */
     public function __construct(
-        CodeLoc $loc,
+        HasCodeLoc $loc,
         string $name,
         array $members,
         string $parent = null,
@@ -334,12 +339,12 @@ class Interface_ extends Classish {
     private $extends = [];
 
     /**
-     * @param CodeLoc   $loc
+     * @param HasCodeLoc   $loc
      * @param string    $name
      * @param string[]  $extends
      * @param Method_[] $methods
      */
-    public function __construct(CodeLoc $loc, string $name, array $extends, array $methods) {
+    public function __construct(HasCodeLoc $loc, string $name, array $extends, array $methods) {
         parent::__construct($loc, $name);
         $this->methods = $methods;
         $this->extends = $extends;
@@ -379,7 +384,7 @@ class ClassConstant extends AbstractClassMember {
     /** @var Expr\Expr */
     private $value;
 
-    public function __construct(CodeLoc $loc, string $name, Expr\Expr $value) {
+    public function __construct(HasCodeLoc $loc, string $name, Expr\Expr $value) {
         parent::__construct($loc);
         $this->name  = $name;
         $this->value = $value;
@@ -414,10 +419,10 @@ class UseTrait extends AbstractClassMember {
     private $aliases = [];
 
     /**
-     * @param CodeLoc  $loc
+     * @param HasCodeLoc  $loc
      * @param string[] $traits
      */
-    public function __construct(CodeLoc $loc, array $traits) {
+    public function __construct(HasCodeLoc $loc, array $traits) {
         parent::__construct($loc);
         $this->traits = $traits;
     }
@@ -475,7 +480,7 @@ class UseTraitInsteadof extends Node {
      */
     private $insteadOf;
 
-    public function __construct(CodeLoc $loc, string $trait, string $method, array $insteadOf) {
+    public function __construct(HasCodeLoc $loc, string $trait, string $method, array $insteadOf) {
         parent::__construct($loc);
         $this->trait     = $trait;
         $this->method    = $method;
@@ -523,13 +528,13 @@ class UseTraitAlias extends Node {
     private $visibility;
 
     /**
-     * @param CodeLoc     $loc
+     * @param HasCodeLoc     $loc
      * @param string      $alias
      * @param string      $method
      * @param null|string $trait
      * @param null|string $visibility
      */
-    public function __construct(CodeLoc $loc, string $alias, string $method, $trait, $visibility) {
+    public function __construct(HasCodeLoc $loc, string $alias, string $method, $trait, $visibility) {
         parent::__construct($loc);
         $this->alias      = $alias;
         $this->method     = $method;
@@ -558,11 +563,11 @@ abstract class ClassMember extends AbstractClassMember {
     private $static;
 
     /**
-     * @param CodeLoc $loc
+     * @param HasCodeLoc $loc
      * @param string  $visibility
      * @param bool    $static
      */
-    public function __construct(CodeLoc $loc, string $visibility, bool $static) {
+    public function __construct(HasCodeLoc $loc, string $visibility, bool $static) {
         parent::__construct($loc);
         $this->visibility = $visibility;
         $this->static     = $static;
@@ -603,7 +608,7 @@ class Property extends ClassMember {
     private $default = null;
 
     /**
-     * @param CodeLoc        $loc
+     * @param HasCodeLoc        $loc
      * @param string         $name
      * @param Type\Type      $type
      * @param Expr\Expr|null $default
@@ -611,7 +616,7 @@ class Property extends ClassMember {
      * @param bool           $static
      */
     public function __construct(
-        CodeLoc $loc,
+        HasCodeLoc $loc,
         string $name,
         Type\Type $type,
         Expr\Expr $default = null,
@@ -650,7 +655,7 @@ class Method_ extends ClassMember {
     private $final;
 
     /**
-     * @param CodeLoc             $loc
+     * @param HasCodeLoc             $loc
      * @param string              $name
      * @param Function_\Function_ $type
      * @param Stmt\Block|null     $body
@@ -659,7 +664,7 @@ class Method_ extends ClassMember {
      * @param bool                $static
      */
     public function __construct(
-        CodeLoc $loc,
+        HasCodeLoc $loc,
         string $name,
         Function_\Function_ $type,
         Stmt\Block $body = null,

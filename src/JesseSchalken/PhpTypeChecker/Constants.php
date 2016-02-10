@@ -2,14 +2,17 @@
 
 namespace JesseSchalken\PhpTypeChecker\Constants;
 
-use JesseSchalken\PhpTypeChecker\CodeLoc;
-use JesseSchalken\PhpTypeChecker\Expr\Expr;
+use JesseSchalken\PhpTypeChecker\ErrorReceiver;
+use JesseSchalken\PhpTypeChecker\HasCodeLoc;
+use JesseSchalken\PhpTypeChecker\Expr;
+use JesseSchalken\PhpTypeChecker\Decls;
+use JesseSchalken\PhpTypeChecker\Type;
 
-class GetConstant extends Expr {
+class GetConstant extends Expr\Expr {
     /** @var string */
     private $name;
 
-    public function __construct(CodeLoc $loc, string $name) {
+    public function __construct(HasCodeLoc $loc, string $name) {
         parent::__construct($loc);
         $this->name = $name;
     }
@@ -21,15 +24,18 @@ class GetConstant extends Expr {
     public function unparseExpr():\PhpParser\Node\Expr {
         return new \PhpParser\Node\Expr\ConstFetch(new \PhpParser\Node\Name\FullyQualified($this->name));
     }
+
+    public function getType(Decls\LocalDecls $locals, Decls\GlobalDecls $globals, ErrorReceiver $errors):Type\Type {
+    }
 }
 
-class GetClassConstant extends Expr {
-    /** @var Expr */
+class GetClassConstant extends Expr\Expr {
+    /** @var Expr\Expr */
     private $class;
     /** @var string */
     private $const;
 
-    public function __construct(CodeLoc $loc, Expr $class, string $const) {
+    public function __construct(HasCodeLoc $loc, Expr\Expr $class, string $const) {
         parent::__construct($loc);
         $this->class = $class;
         $this->const = $const;
@@ -44,6 +50,16 @@ class GetClassConstant extends Expr {
             $this->class->unparseExprOrName(),
             $this->const
         );
+    }
+
+    public function getType(Decls\LocalDecls $locals, Decls\GlobalDecls $globals, ErrorReceiver $errors):Type\Type {
+        $expr = $globals->getConstant($this->const);
+        if (!$expr) {
+            $errors->add("Undefined constant '$this->const'", $this);
+            return new Type\Mixed($this);
+        } else {
+            return $expr->getType($locals, $globals, $errors);
+        }
     }
 }
 
@@ -71,18 +87,18 @@ final class MagicConst extends \JesseSchalken\Enum\StringEnum {
     }
 }
 
-class GetMagicConst extends Expr {
+class GetMagicConst extends Expr\Expr {
     /** @var string */
     private $type;
     /** @var int|string */
     private $value;
 
     /**
-     * @param CodeLoc    $loc
+     * @param HasCodeLoc $loc
      * @param string     $type
      * @param int|string $value
      */
-    public function __construct(CodeLoc $loc, string $type, $value) {
+    public function __construct(HasCodeLoc $loc, string $type, $value) {
         parent::__construct($loc);
         $this->type  = $type;
         $this->value = $value;
@@ -114,9 +130,13 @@ class GetMagicConst extends Expr {
                 throw new \Exception('Invlaid magic constant type: ' . $this->type);
         }
     }
+
+    public function getType(Decls\LocalDecls $locals, Decls\GlobalDecls $globals, ErrorReceiver $errors):Type\Type {
+        return new Type\SingleValue($this, $this->value);
+    }
 }
 
-class Literal extends Expr {
+class Literal extends Expr\Expr {
     private static function literalToNode($value):\PhpParser\Node\Expr {
         if (is_string($value)) {
             return new \PhpParser\Node\Scalar\String_($value);
@@ -144,14 +164,14 @@ class Literal extends Expr {
         }
     }
 
-    /** @var array|bool|float|int|null|string */
+    /** @var bool|float|int|null|string */
     private $value;
 
     /**
-     * @param CodeLoc                          $loc
-     * @param string|int|float|bool|null|array $value
+     * @param HasCodeLoc                 $loc
+     * @param string|int|float|bool|null $value
      */
-    public function __construct(CodeLoc $loc, $value) {
+    public function __construct(HasCodeLoc $loc, $value) {
         parent::__construct($loc);
         $this->value = $value;
     }
@@ -183,6 +203,10 @@ class Literal extends Expr {
 
     public function value() {
         return $this->value;
+    }
+
+    public function getType(Decls\LocalDecls $locals, Decls\GlobalDecls $globals, ErrorReceiver $errors):Type\Type {
+        return new Type\SingleValue($this, $this->value);
     }
 }
 

@@ -4,6 +4,7 @@ namespace JesseSchalken\PhpTypeChecker\Parser;
 
 use JesseSchalken\MagicUtils\DeepClone;
 use JesseSchalken\PhpTypeChecker\Call;
+use JesseSchalken\PhpTypeChecker\HasCodeLoc;
 use JesseSchalken\PhpTypeChecker\CodeLoc;
 use JesseSchalken\PhpTypeChecker\Constants;
 use JesseSchalken\PhpTypeChecker\ControlStructure;
@@ -220,13 +221,13 @@ final class ParsedFile {
         $this->contents = $contents;
     }
 
-    public function locateError(\PhpParser\Error $error):CodeLoc {
+    public function locateError(\PhpParser\Error $error):HasCodeLoc {
         $line = $this->lineOffset + $error->getStartLine();
         $col  = $this->offsetToColumn($error->hasColumnInfo() ? $error->getAttributes()['startFilePos'] : null);
         return new CodeLoc($this->path, $line, $col);
     }
 
-    public function locateNode(\PhpParser\Node $node):CodeLoc {
+    public function locateNode(\PhpParser\Node $node):HasCodeLoc {
         $line = $this->lineOffset + $node->getLine();
         $col  = $this->offsetToColumn($node->getAttribute('startFilePos'));
         return new CodeLoc($this->path, $line, $col);
@@ -244,7 +245,7 @@ final class ParsedFile {
         }
     }
 
-    public function nullLoc():CodeLoc {
+    public function nullLoc():HasCodeLoc {
         return new CodeLoc($this->path, 1, 1);
     }
 }
@@ -411,12 +412,12 @@ final class Parser {
     }
 
     /**
-     * @param CodeLoc                $loc
+     * @param HasCodeLoc                $loc
      * @param \PhpParser\Node\Stmt[] $nodes
      * @return Stmt\Block
      * @throws \Exception
      */
-    public function parseStmts(CodeLoc $loc, array $nodes):Stmt\Block {
+    public function parseStmts(HasCodeLoc $loc, array $nodes):Stmt\Block {
         $stmts = new Stmt\Block($loc);
         foreach ($nodes as $node) {
             $this->parseVariableDocBlocks($node, $stmts);
@@ -782,14 +783,14 @@ final class Parser {
     }
 
     /**
-     * @param CodeLoc                                    $loc
+     * @param HasCodeLoc                                    $loc
      * @param string                                     $string
      * @param \phpDocumentor\Reflection\DocBlock\Context $context
      * @return Type\Type|null
      * @throws \Exception
      */
     private function parseDocType(
-        CodeLoc $loc,
+        HasCodeLoc $loc,
         string $string,
         \phpDocumentor\Reflection\DocBlock\Context $context
     ) {
@@ -806,7 +807,7 @@ final class Parser {
     }
 
     private function parseDocTypeObject(
-        CodeLoc $loc,
+        HasCodeLoc $loc,
         \phpDocumentor\Reflection\Type $type,
         \phpDocumentor\Reflection\Types\Context $context
     ):Type\Type {
@@ -865,7 +866,7 @@ final class Parser {
 
     private function checkCompatible(Type\Type $sup, Type\Type $sub) {
         if (!$sup->containsType($sub, new Type\DummyTypeContext())) {
-            $this->errors->add("Warning $sub is not compatible with $sup", $sup->loc());
+            $this->errors->add("Warning $sub is not compatible with $sup", $sup);
         }
     }
 
@@ -885,7 +886,7 @@ final class Parser {
             $default = $this->parseExprNull($param->default);
 
             if ($default && $default instanceof Constants\Literal && $default->value() === null) {
-                $type = $type->addSingleType(new Type\SingleValue($default->loc(), null), new Type\DummyTypeContext());
+                $type = $type->addSingleType(new Type\SingleValue($default, null), new Type\DummyTypeContext());
             }
 
             $paramDefaults[$name] = $default;
@@ -942,12 +943,12 @@ final class Parser {
     }
 
     /**
-     * @param CodeLoc                          $loc
+     * @param HasCodeLoc                          $loc
      * @param null|string|\PhpParser\Node\Name $type
      * @return Type\Type
      * @throws \Exception
      */
-    private function parseType(CodeLoc $loc, $type):Type\Type {
+    private function parseType(HasCodeLoc $loc, $type):Type\Type {
         if ($type === null) {
             return new Type\Mixed($loc);
         } else if (is_string($type)) {
@@ -1040,11 +1041,11 @@ final class Parser {
 
     /**
      * @param \PhpParser\Node\Expr|string $node
-     * @param CodeLoc                     $loc
+     * @param HasCodeLoc                     $loc
      * @return Expr\Expr
      * @throws \Exception
      */
-    private function parseExprString($node, CodeLoc $loc):Expr\Expr {
+    private function parseExprString($node, HasCodeLoc $loc):Expr\Expr {
         return is_string($node) ? new Constants\Literal($loc, $node) : $this->parseExpr($node);
     }
 
@@ -1295,7 +1296,7 @@ final class Parser {
         }
     }
 
-    private function parseCast(\PhpParser\Node\Expr\Cast $node, CodeLoc $loc):Expr\Expr {
+    private function parseCast(\PhpParser\Node\Expr\Cast $node, HasCodeLoc $loc):Expr\Expr {
         if ($node instanceof \PhpParser\Node\Expr\Cast\Array_) {
             $type = Expr\Cast::ARRAY;
         } elseif ($node instanceof \PhpParser\Node\Expr\Cast\Bool_) {
@@ -1317,7 +1318,7 @@ final class Parser {
         return new Expr\Cast($loc, $type, $this->parseExpr($node->expr));
     }
 
-    private function parseAssignOp(\PhpParser\Node\Expr\AssignOp $node, CodeLoc $loc):Expr\Expr {
+    private function parseAssignOp(\PhpParser\Node\Expr\AssignOp $node, HasCodeLoc $loc):Expr\Expr {
         if ($node instanceof \PhpParser\Node\Expr\AssignOp\BitwiseAnd) {
             $type = Expr\BinOp::ASSIGN_BIT_AND;
         } elseif ($node instanceof \PhpParser\Node\Expr\AssignOp\BitwiseOr) {
@@ -1351,7 +1352,7 @@ final class Parser {
         return new Expr\BinOp($loc, $left, $type, $right);
     }
 
-    private function parseBinaryOp(\PhpParser\Node\Expr\BinaryOp $node, CodeLoc $loc):Expr\Expr {
+    private function parseBinaryOp(\PhpParser\Node\Expr\BinaryOp $node, HasCodeLoc $loc):Expr\Expr {
         if ($node instanceof \PhpParser\Node\Expr\BinaryOp\BitwiseAnd) {
             $type = Expr\BinOp::BIT_AND;
         } elseif ($node instanceof \PhpParser\Node\Expr\BinaryOp\BitwiseOr) {
@@ -1477,11 +1478,11 @@ final class Parser {
         );
     }
 
-    private function locateNode(\PhpParser\Node $node):CodeLoc {
+    private function locateNode(\PhpParser\Node $node):HasCodeLoc {
         return $this->file->locateNode($node);
     }
 
-    private function selfType(CodeLoc $loc):Type\Class_ {
+    private function selfType(HasCodeLoc $loc):Type\Class_ {
         if (!$this->class) {
             throw new \Exception('Use of "self" outside a class');
         } else {

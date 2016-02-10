@@ -2,7 +2,7 @@
 
 namespace JesseSchalken\PhpTypeChecker\Expr;
 
-use JesseSchalken\PhpTypeChecker\CodeLoc;
+use JesseSchalken\PhpTypeChecker\HasCodeLoc;
 use JesseSchalken\PhpTypeChecker\Decls;
 use JesseSchalken\PhpTypeChecker\ErrorReceiver;
 use JesseSchalken\PhpTypeChecker\Function_;
@@ -44,7 +44,7 @@ class Yield_ extends Expr {
     /** @var Expr|null */
     private $val;
 
-    public function __construct(CodeLoc $loc, Expr $key = null, Expr $val = null) {
+    public function __construct(HasCodeLoc $loc, Expr $key = null, Expr $val = null) {
         parent::__construct($loc);
         $this->key = $key;
         $this->val = $val;
@@ -81,7 +81,7 @@ class Include_ extends Expr {
     /** @var Expr */
     private $expr;
 
-    public function __construct(CodeLoc $loc, Expr $expr, bool $require, bool $once) {
+    public function __construct(HasCodeLoc $loc, Expr $expr, bool $require, bool $once) {
         parent::__construct($loc);
         $this->require = $require;
         $this->once    = $once;
@@ -114,10 +114,10 @@ class Array_ extends Expr {
     private $items = [];
 
     /**
-     * @param CodeLoc     $loc
+     * @param HasCodeLoc     $loc
      * @param ArrayItem[] $items
      */
-    public function __construct(CodeLoc $loc, array $items) {
+    public function __construct(HasCodeLoc $loc, array $items) {
         parent::__construct($loc);
         $this->items = $items;
     }
@@ -141,16 +141,23 @@ class Array_ extends Expr {
     }
 
     public function getType(Decls\LocalDecls $locals, Decls\GlobalDecls $globals, ErrorReceiver $errors):Type\Type {
-        $loc   = $this->loc();
         $shape = true;
         $types = [];
         foreach ($this->items as $item) {
+            $key = $item->key()->getType($locals, $globals, $errors)->asArrayKey($errors);
+            $val = $item->val()->getType($locals, $globals, $errors);
+            foreach ($key as $k) {
+                if ($k === null) {
+                    $shape = false;
+                }
+                $types[$k] = $val->addType($types[$k] ?? Type\Type::none($this->loc()), $globals);
+            }
         }
 
         if ($shape) {
-            return new Type\Shape($loc, $types);
+            return new Type\Shape($this, $types);
         } else {
-            return Type\Type::union($loc, $types);
+            return Type\Type::union($this, $types);
         }
     }
 }
@@ -164,12 +171,12 @@ class ArrayItem extends Node {
     private $byRef;
 
     /**
-     * @param CodeLoc   $loc
+     * @param HasCodeLoc   $loc
      * @param Expr|null $key
      * @param Expr      $value
      * @param bool      $byByRef
      */
-    public function __construct(CodeLoc $loc, Expr $key = null, Expr $value, bool $byByRef) {
+    public function __construct(HasCodeLoc $loc, Expr $key = null, Expr $value, bool $byByRef) {
         parent::__construct($loc);
         $this->key   = $key;
         $this->value = $value;
@@ -191,7 +198,7 @@ class ArrayItem extends Node {
         return $this->key;
     }
 
-    public function value():Expr {
+    public function val():Expr {
         return $this->value;
     }
 
@@ -201,24 +208,6 @@ class ArrayItem extends Node {
             $this->key ? $this->key->unparseExpr() : null,
             $this->byRef
         );
-    }
-}
-
-class Print_ extends Expr {
-    /** @var Expr */
-    private $expr;
-
-    public function __construct(CodeLoc $loc, Expr $expr) {
-        parent::__construct($loc);
-        $this->expr = $expr;
-    }
-
-    public function subStmts():array {
-        return [$this->expr];
-    }
-
-    public function unparseExpr():\PhpParser\Node\Expr {
-        return new \PhpParser\Node\Expr\Print_($this->expr->unparseExpr());
     }
 }
 
@@ -233,14 +222,14 @@ class Closure extends Expr {
     private $body;
 
     /**
-     * @param CodeLoc             $loc
+     * @param HasCodeLoc             $loc
      * @param bool                $static
      * @param Function_\Function_ $type
      * @param ClosureUse[]        $uses
      * @param Stmt\Block          $body
      */
     public function __construct(
-        CodeLoc $loc,
+        HasCodeLoc $loc,
         bool $static,
         Function_\Function_ $type,
         array $uses,
@@ -277,6 +266,10 @@ class Closure extends Expr {
             'stmts'  => $this->body->unparseNodes(),
         ]));
     }
+
+    public function getType(Decls\LocalDecls $locals, Decls\GlobalDecls $globals, ErrorReceiver $errors):Type\Type {
+        return new Type\Class_($this, 'Closure');
+    }
 }
 
 class ClosureUse extends Node {
@@ -285,7 +278,7 @@ class ClosureUse extends Node {
     /** @var bool */
     private $byRef;
 
-    public function __construct(CodeLoc $loc, string $name, bool $byRef) {
+    public function __construct(HasCodeLoc $loc, string $name, bool $byRef) {
         parent::__construct($loc);
         $this->name  = $name;
         $this->byRef = $byRef;
@@ -304,7 +297,7 @@ class Ternary extends Expr {
     /** @var Expr */
     private $false;
 
-    public function __construct(CodeLoc $loc, Expr $cond, Expr $true = null, Expr $false) {
+    public function __construct(HasCodeLoc $loc, Expr $cond, Expr $true = null, Expr $false) {
         parent::__construct($loc);
         $this->cond  = $cond;
         $this->true  = $true;
@@ -325,6 +318,20 @@ class Ternary extends Expr {
             $this->true ? $this->true->unparseExpr() : null,
             $this->false->unparseExpr()
         );
+    }
+
+    public function getType(Decls\LocalDecls $locals, Decls\GlobalDecls $globals, ErrorReceiver $errors):Type\Type {
+        // TODO Apply type gaurds in $this->cond
+
+        if ($this->true) {
+            $true = $this->true->getType($locals, $globals, $errors);
+        } else {
+            $true = $this->cond->getType($locals, $globals, $errors)->removeFalsy($globals);
+        }
+
+        $false = $this->false->getType($locals, $globals, $errors);
+
+        return Type\Type::union($this, [$true, $false,]);
     }
 }
 
@@ -349,10 +356,10 @@ class ConcatMany extends Expr {
     private $exprs;
 
     /**
-     * @param CodeLoc $loc
+     * @param HasCodeLoc $loc
      * @param Expr[]  $exprs
      */
-    public function __construct(CodeLoc $loc, array $exprs) {
+    public function __construct(HasCodeLoc $loc, array $exprs) {
         parent::__construct($loc);
         $this->exprs = $exprs;
     }
@@ -364,6 +371,11 @@ class ConcatMany extends Expr {
     public function unparseExpr():\PhpParser\Node\Expr {
         return new \PhpParser\Node\Scalar\Encapsed(self::unparseEncaps($this->exprs));
     }
+
+    public function getType(Decls\LocalDecls $locals, Decls\GlobalDecls $globals, ErrorReceiver $errors):Type\Type {
+        // TODO Make this really smart and return a SingleValue (or union thereof) if it can
+        return new Type\String_($this);
+    }
 }
 
 class Isset_ extends Expr {
@@ -371,10 +383,10 @@ class Isset_ extends Expr {
     private $exprs;
 
     /**
-     * @param CodeLoc $loc
+     * @param HasCodeLoc $loc
      * @param Expr[]  $exprs
      */
-    public function __construct(CodeLoc $loc, array $exprs) {
+    public function __construct(HasCodeLoc $loc, array $exprs) {
         parent::__construct($loc);
         $this->exprs = $exprs;
     }
@@ -389,6 +401,10 @@ class Isset_ extends Expr {
             $exprs[] = $expr->unparseExpr();
         }
         return new \PhpParser\Node\Expr\Isset_($exprs);
+    }
+
+    public function getType(Decls\LocalDecls $locals, Decls\GlobalDecls $globals, ErrorReceiver $errors):Type\Type {
+        return new Type\Int_($this->loc());
     }
 }
 
@@ -456,7 +472,7 @@ class BinOp extends Expr {
     /** @var Expr */
     private $right;
 
-    public function __construct(CodeLoc $loc, Expr $left, string $type, Expr $right) {
+    public function __construct(HasCodeLoc $loc, Expr $left, string $type, Expr $right) {
         parent::__construct($loc);
         $this->left  = $left;
         $this->type  = $type;
@@ -565,6 +581,86 @@ class BinOp extends Expr {
                 throw new \Exception('Invalid binary operator type: ' . $this->type);
         }
     }
+
+    public function getType(Decls\LocalDecls $locals, Decls\GlobalDecls $globals, ErrorReceiver $errors):Type\Type {
+        switch ($this->type) {
+            case self::INSTANCEOF:
+                return Type\Type::bool($this);
+
+            case self::ADD:
+            case self::SUBTRACT:
+            case self::MULTIPLY:
+            case self::DIVIDE:
+            case self::MODULUS:
+            case self::EXPONENT:
+                return Type\Type::number($this);
+
+            case self::BIT_AND:
+            case self::BIT_OR:
+            case self::BIT_XOR:
+            case self::SHIFT_LEFT:
+            case self::SHIFT_RIGHT:
+                return new Type\Int_($this);
+
+            case self::EQUAL:
+            case self::IDENTICAL:
+            case self::NOT_EQUAL:
+            case self::NOT_IDENTICAL:
+            case self::GREATER:
+            case self::LESS:
+            case self::GREATER_OR_EQUAL:
+            case self::LESS_OR_EQUAL:
+                return Type\Type::bool($this);
+
+            case self::SPACESHIP:
+                return Type\Type::union($this, [
+                    new Type\SingleValue($this, -1),
+                    new Type\SingleValue($this, 0),
+                    new Type\SingleValue($this, 1),
+                ]);
+
+            case self::COALESCE:
+                $left  = $this->left->getType($locals, $globals, $errors)->removeNull($globals);
+                $right = $this->right->getType($locals, $globals, $errors);
+                return Type\Type::union($this, [$left, $right]);
+
+            case self::BOOl_AND:
+            case self::BOOl_OR:
+            case self::LOGIC_AND:
+            case self::LOGIC_OR:
+            case self::LOGIC_XOR:
+                return Type\Type::bool($this);
+
+            case self::CONCAT:
+                // TODO Make this be really smart and return a SingleValue if it can
+                return new Type\String_($this);
+
+            case self::ASSIGN:
+            case self::ASSIGN_REF:
+                return $this->right->getType($locals, $globals, $errors);
+
+            case self::ASSIGN_ADD:
+            case self::ASSIGN_SUBTRACT:
+            case self::ASSIGN_MULTIPLY:
+            case self::ASSIGN_DIVIDE:
+            case self::ASSIGN_MODULUS:
+            case self::ASSIGN_EXPONENT:
+                return Type\Type::number($this);
+
+            case self::ASSIGN_CONCAT:
+                return new Type\String_($this);
+
+            case self::ASSIGN_BIT_AND:
+            case self::ASSIGN_BIT_OR:
+            case self::ASSIGN_BIT_XOR:
+            case self::ASSIGN_SHIFT_LEFT:
+            case self::ASSIGN_SHIFT_RIGHT:
+                return new Type\Int_($this);
+
+            default:
+                throw new \Exception('huh?');
+        }
+    }
 }
 
 class Cast extends Expr {
@@ -581,7 +677,7 @@ class Cast extends Expr {
     /** @var Expr */
     private $expr;
 
-    public function __construct(CodeLoc $loc, string $type, Expr $expr) {
+    public function __construct(HasCodeLoc $loc, string $type, Expr $expr) {
         parent::__construct($loc);
         $this->type = $type;
         $this->expr = $expr;
@@ -612,6 +708,27 @@ class Cast extends Expr {
                 throw new \Exception('Invalid cast type: ' . $this->type);
         }
     }
+
+    public function getType(Decls\LocalDecls $locals, Decls\GlobalDecls $globals, ErrorReceiver $errors):Type\Type {
+        switch ($this->type) {
+            case self::INT:
+                return new Type\Int_($this);
+            case self::BOOL:
+                return Type\Type::bool($this);
+            case self::FLOAT:
+                return new Type\Float_($this);
+            case self::STRING:
+                return new Type\String_($this);
+            case self::ARRAY:
+                return new Type\Array_($this, new Type\Mixed($this));
+            case self::OBJECT:
+                return new Type\Object($this);
+            case self::UNSET:
+                return new Type\SingleValue($this, null);
+            default:
+                throw new \Exception('Invalid cast type: ' . $this->type);
+        }
+    }
 }
 
 class UnOp extends Expr {
@@ -634,7 +751,7 @@ class UnOp extends Expr {
     /** @var Expr */
     private $expr;
 
-    public function __construct(CodeLoc $loc, string $type, Expr $expr) {
+    public function __construct(HasCodeLoc $loc, string $type, Expr $expr) {
         parent::__construct($loc);
         $this->type = $type;
         $this->expr = $expr;
@@ -677,13 +794,54 @@ class UnOp extends Expr {
                 throw new \Exception('Invalid unary operator type: ' . $this->type);
         }
     }
+
+    public function getType(Decls\LocalDecls $locals, Decls\GlobalDecls $globals, ErrorReceiver $errors):Type\Type {
+        switch ($this->type) {
+            case self::PRE_INC:
+            case self::PRE_DEC:
+                return Type\Type::number($this);
+
+            case self::POST_INC:
+            case self::POST_DEC:
+                return $this->expr->getType($locals, $globals, $errors);
+
+            case self::PRINT:
+                // "print ..." always evaluates to int(1)
+                return new Type\SingleValue($this, 1);
+
+            case self::BOOL_NOT:
+                return Type\Type::bool($this);
+
+            case self::BIT_NOT:
+                return new Type\Int_($this);
+
+            case self::PLUS:
+            case self::NEGATE:
+                return Type\Type::number($this);
+
+            case self::SUPPRESS:
+                return $this->expr->getType($locals, $globals, $errors);
+
+            case self::EMPTY:
+                return Type\Type::bool($this);
+
+            case self::EVAL:
+                return new Type\Mixed($this);
+
+            case self::CLONE:
+                return $this->expr->getType($locals, $globals, $errors);
+
+            default:
+                throw new \Exception('Invalid unary operator type: ' . $this->type);
+        }
+    }
 }
 
 class Exit_ extends Expr {
     /** @var Expr|null */
     private $expr;
 
-    public function __construct(CodeLoc $loc, Expr $expr = null) {
+    public function __construct(HasCodeLoc $loc, Expr $expr = null) {
         parent::__construct($loc);
         $this->expr = $expr;
     }
@@ -696,6 +854,11 @@ class Exit_ extends Expr {
         $expr = $this->expr ? $this->expr->unparseExpr() : null;
         return new \PhpParser\Node\Expr\Exit_($expr);
     }
+
+    public function getType(Decls\LocalDecls $locals, Decls\GlobalDecls $globals, ErrorReceiver $errors):Type\Type {
+        // "exit" is an expression??? How do you use the result?
+        return new Type\Mixed($this);
+    }
 }
 
 class ShellExec extends Expr {
@@ -703,10 +866,10 @@ class ShellExec extends Expr {
     private $parts;
 
     /**
-     * @param CodeLoc $loc
+     * @param HasCodeLoc $loc
      * @param Expr[]  $parts
      */
-    public function __construct(CodeLoc $loc, array $parts) {
+    public function __construct(HasCodeLoc $loc, array $parts) {
         parent::__construct($loc);
         $this->parts = $parts;
     }
@@ -717,6 +880,10 @@ class ShellExec extends Expr {
 
     public function unparseExpr():\PhpParser\Node\Expr {
         return new \PhpParser\Node\Expr\ShellExec(ConcatMany::unparseEncaps($this->parts));
+    }
+
+    public function getType(Decls\LocalDecls $locals, Decls\GlobalDecls $globals, ErrorReceiver $errors):Type\Type {
+        return new Type\String_($this);
     }
 }
 
@@ -733,7 +900,7 @@ class ClassName extends AbstractClassName {
     /** @var string */
     private $class;
 
-    public function __construct(CodeLoc $loc, string $class) {
+    public function __construct(HasCodeLoc $loc, string $class) {
         parent::__construct($loc);
         if (substr($class, 0, 1) === '\\') {
             throw new \Exception("Illegal class name: $class");
@@ -742,7 +909,7 @@ class ClassName extends AbstractClassName {
     }
 
     public function toType(string $static = null, bool $strict = false):Type\Type {
-        return new Type\Class_($this->loc(), $this->class);
+        return new Type\Class_($this, $this->class);
     }
 
     public function toString(string $static = null):string {
@@ -767,6 +934,10 @@ class ClassName extends AbstractClassName {
     public function unparseExprOrString() {
         return $this->class;
     }
+
+    public function getType(Decls\LocalDecls $locals, Decls\GlobalDecls $globals, ErrorReceiver $errors):Type\Type {
+        return new Type\SingleValue($this, $this->class);
+    }
 }
 
 /**
@@ -782,8 +953,8 @@ class StaticClassName extends AbstractClassName {
     }
 
     public function toType(string $static = null, bool $strict = false):Type\Type {
-        $type = new Type\Class_($this->loc(), $this->toString($static));
-        $type = new Type\TypeVar($this->loc(), Type\TypeVar::STATIC, $type);
+        $type = new Type\Class_($this, $this->toString($static));
+        $type = new Type\TypeVar($this, Type\TypeVar::STATIC, $type);
         return $type;
     }
 
@@ -800,5 +971,9 @@ class StaticClassName extends AbstractClassName {
 
     public function unparseExprOrName() {
         return new \PhpParser\Node\Name('static');
+    }
+
+    public function getType(Decls\LocalDecls $locals, Decls\GlobalDecls $globals, ErrorReceiver $errors):Type\Type {
+        return new Type\String_($this);
     }
 }

@@ -2,20 +2,25 @@
 
 namespace JesseSchalken\PhpTypeChecker\LValue;
 
-use JesseSchalken\PhpTypeChecker\CodeLoc;
-use JesseSchalken\PhpTypeChecker\Expr\Expr;
+use JesseSchalken\PhpTypeChecker\ErrorReceiver;
+use JesseSchalken\PhpTypeChecker\HasCodeLoc;
+use JesseSchalken\PhpTypeChecker\Expr;
+use JesseSchalken\PhpTypeChecker\Decls;
+use JesseSchalken\PhpTypeChecker\Defns;
+use JesseSchalken\PhpTypeChecker\Constants;
+use JesseSchalken\PhpTypeChecker\Type;
 
-abstract class LValue extends Expr {
+abstract class LValue extends Expr\Expr {
     public function isLValue():bool {
         return true;
     }
 }
 
 class Variable extends LValue {
-    /** @var Expr */
+    /** @var Expr\Expr */
     private $name;
 
-    public function __construct(CodeLoc $loc, Expr $name) {
+    public function __construct(HasCodeLoc $loc, Expr\Expr $name) {
         parent::__construct($loc);
         $this->name = $name;
     }
@@ -26,6 +31,9 @@ class Variable extends LValue {
 
     public function unparseExpr():\PhpParser\Node\Expr {
         return new \PhpParser\Node\Expr\Variable($this->name->unparseExprOrString());
+    }
+
+    public function getType(Decls\LocalDecls $locals, Decls\GlobalDecls $globals, ErrorReceiver $errors):Type\Type {
     }
 }
 
@@ -59,7 +67,7 @@ class SuperGlobalAccess extends LValue {
     /** @var SuperGlobal */
     private $global;
 
-    public function __construct(CodeLoc $loc, SuperGlobal $global) {
+    public function __construct(HasCodeLoc $loc, SuperGlobal $global) {
         parent::__construct($loc);
         $this->global = $global;
     }
@@ -71,20 +79,31 @@ class SuperGlobalAccess extends LValue {
     public function unparseExpr():\PhpParser\Node\Expr {
         return new \PhpParser\Node\Expr\Variable($this->global->value());
     }
+
+    public function getType(Decls\LocalDecls $locals, Decls\GlobalDecls $globals, ErrorReceiver $errors):Type\Type {
+        $global = $this->global->value();
+        $type   = $globals->getGlobal($global);
+        if ($type === null) {
+            $errors->add("Undefined global '$global'", $this);
+            return new Type\Mixed($this);
+        } else {
+            return $type;
+        }
+    }
 }
 
 class Property extends LValue {
-    /** @var Expr */
+    /** @var Expr\Expr */
     private $object;
-    /** @var Expr */
+    /** @var Expr\Expr */
     private $property;
 
     /**
-     * @param CodeLoc $loc
-     * @param Expr    $object
-     * @param Expr    $property
+     * @param HasCodeLoc $loc
+     * @param Expr\Expr  $object
+     * @param Expr\Expr  $property
      */
-    public function __construct(CodeLoc $loc, Expr $object, Expr $property) {
+    public function __construct(HasCodeLoc $loc, Expr\Expr $object, Expr\Expr $property) {
         parent::__construct($loc);
         $this->object   = $object;
         $this->property = $property;
@@ -104,15 +123,19 @@ class Property extends LValue {
             $this->property->unparseExprOrString()
         );
     }
+
+    public function getType(Decls\LocalDecls $locals, Decls\GlobalDecls $globals, ErrorReceiver $errors):Type\Type {
+        // TODO: Implement getType() method.
+    }
 }
 
 class StaticProperty extends LValue {
-    /** @var Expr */
+    /** @var Expr\Expr */
     private $class;
-    /** @var Expr */
+    /** @var Expr\Expr */
     private $property;
 
-    public function __construct(CodeLoc $loc, Expr $class, Expr $property) {
+    public function __construct(HasCodeLoc $loc, Expr\Expr $class, Expr\Expr $property) {
         parent::__construct($loc);
         $this->class    = $class;
         $this->property = $property;
@@ -132,20 +155,24 @@ class StaticProperty extends LValue {
             $this->property->unparseExprOrString()
         );
     }
+
+    public function getType(Decls\LocalDecls $locals, Decls\GlobalDecls $globals, ErrorReceiver $errors):Type\Type {
+        // TODO: Implement getType() method.
+    }
 }
 
 class ArrayAccess extends LValue {
-    /** @var Expr */
+    /** @var Expr\Expr */
     private $array;
-    /** @var Expr|null */
+    /** @var Expr\Expr|null */
     private $key;
 
     /**
-     * @param CodeLoc   $loc
-     * @param Expr      $array
-     * @param Expr|null $key
+     * @param HasCodeLoc     $loc
+     * @param Expr\Expr      $array
+     * @param Expr\Expr|null $key
      */
-    public function __construct(CodeLoc $loc, Expr $array, Expr $key = null) {
+    public function __construct(HasCodeLoc $loc, Expr\Expr $array, Expr\Expr $key = null) {
         parent::__construct($loc);
         $this->array = $array;
         $this->key   = $key;
@@ -165,17 +192,21 @@ class ArrayAccess extends LValue {
             $this->key ? $this->key->unparseExpr() : null
         );
     }
+
+    public function getType(Decls\LocalDecls $locals, Decls\GlobalDecls $globals, ErrorReceiver $errors):Type\Type {
+        // TODO: Implement getType() method.
+    }
 }
 
-class List_ extends Expr {
+class List_ extends Expr\Expr {
     /** @var (Expr|null)[] */
     private $exprs;
 
     /**
-     * @param CodeLoc $loc
+     * @param HasCodeLoc $loc
      * @param (Expr|null)[]   $exprs
      */
-    public function __construct(CodeLoc $loc, array $exprs) {
+    public function __construct(HasCodeLoc $loc, array $exprs) {
         parent::__construct($loc);
         $this->exprs = $exprs;
     }
@@ -192,11 +223,21 @@ class List_ extends Expr {
 
     public function unparseExpr():\PhpParser\Node\Expr {
         $exprs = [];
-        /** @var Expr|null $expr */
+        /** @var Expr\Expr|null $expr */
         foreach ($this->exprs as $expr) {
             $exprs[] = $expr ? $expr->unparseExpr() : null;
         }
         return new \PhpParser\Node\Expr\List_($exprs);
+    }
+
+    public function getType(Decls\LocalDecls $locals, Decls\GlobalDecls $globals, ErrorReceiver $errors):Type\Type {
+        $items = [];
+        foreach ($this->exprs as $k => $v) {
+            if ($v) {
+                $items[] = new Expr\ArrayItem($v, new Constants\Literal($v, $k), $v);
+            }
+        }
+        return new Expr\Array_($this, $items);
     }
 }
 

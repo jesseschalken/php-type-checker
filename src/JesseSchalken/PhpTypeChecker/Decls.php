@@ -4,15 +4,16 @@ namespace JesseSchalken\PhpTypeChecker\Decls;
 
 use JesseSchalken\PhpTypeChecker\Function_;
 use JesseSchalken\PhpTypeChecker\Type;
+use JesseSchalken\PhpTypeChecker\Expr;
 use function JesseSchalken\PhpTypeChecker\normalize_constant;
 use function JesseSchalken\PhpTypeChecker\str_ieq;
 
-class GlobalDecls {
+class GlobalDecls implements Type\TypeContext {
     /** @var Type\Type[] */
     private $globals = [];
     /** @var Function_\Function_ */
     private $functions = [];
-    /** @var Type\Type */
+    /** @var Expr\Expr */
     private $constants = [];
     /** @var ClassDecl[] */
     private $classes = [];
@@ -25,8 +26,8 @@ class GlobalDecls {
         $this->functions[strtolower($name)] = $function;
     }
 
-    public function addConstant(string $name, Type\Type $type) {
-        $this->constants[normalize_constant($name)] = $type;
+    public function addConstant(string $name, Expr\Expr $expr) {
+        $this->constants[normalize_constant($name)] = $expr;
     }
 
     public function hasGlobal(string $name):bool {
@@ -57,9 +58,29 @@ class GlobalDecls {
         return $this->classes[strtolower($name)] ?? null;
     }
 
+    /**
+     * @param string $name
+     * @return Expr\Expr|null
+     */
+    public function getConstant(string $name) {
+        return $this->constants[$name] ?? null;
+    }
+
     public function getClassParents(string $name):array {
         $class = $this->getClass($name);
         return $class ? $class->parents : [];
+    }
+
+    public function functionExistsNoRef(string $name):bool {
+        return false;
+    }
+
+    public function methodExistsNoRef(string $class, string $method, bool $static):bool {
+        return false;
+    }
+
+    public function getGlobal(string $value) {
+        return $this->globals[$value] ?? null;
     }
 }
 

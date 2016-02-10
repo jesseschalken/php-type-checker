@@ -2,7 +2,7 @@
 
 namespace JesseSchalken\PhpTypeChecker\ControlStructure;
 
-use JesseSchalken\PhpTypeChecker\CodeLoc;
+use JesseSchalken\PhpTypeChecker\HasCodeLoc;
 use JesseSchalken\PhpTypeChecker\Decls;
 use JesseSchalken\PhpTypeChecker\Defns;
 use JesseSchalken\PhpTypeChecker\Expr;
@@ -25,11 +25,11 @@ class DoWhile extends ControlStructure {
     private $cond;
 
     /**
-     * @param CodeLoc    $loc
+     * @param HasCodeLoc    $loc
      * @param Stmt\Block $body
      * @param Expr\Expr  $cond
      */
-    public function __construct(CodeLoc $loc, Stmt\Block $body, Expr\Expr $cond) {
+    public function __construct(HasCodeLoc $loc, Stmt\Block $body, Expr\Expr $cond) {
         parent::__construct($loc);
         $this->body = $body;
         $this->cond = $cond;
@@ -55,7 +55,7 @@ class If_ extends ControlStructure {
     /** @var Stmt\Block */
     private $false;
 
-    public function __construct(CodeLoc $loc, Expr\Expr $cond, Stmt\Block $true, Stmt\Block $false) {
+    public function __construct(HasCodeLoc $loc, Expr\Expr $cond, Stmt\Block $true, Stmt\Block $false) {
         parent::__construct($loc);
         $this->cond  = $cond;
         $this->true  = $true;
@@ -108,7 +108,7 @@ class Foreach_ extends ControlStructure {
     private $byRef;
 
     /**
-     * @param CodeLoc        $loc
+     * @param HasCodeLoc        $loc
      * @param Expr\Expr      $array
      * @param Expr\Expr|null $key
      * @param Expr\Expr      $value
@@ -116,7 +116,7 @@ class Foreach_ extends ControlStructure {
      * @param Stmt\Block     $body
      */
     public function __construct(
-        CodeLoc $loc,
+        HasCodeLoc $loc,
         Expr\Expr $array,
         Expr\Expr $key = null,
         Expr\Expr $value,
@@ -166,10 +166,10 @@ class ForComma extends Stmt\Stmt {
     private $exprs = [];
 
     /**
-     * @param CodeLoc     $loc
+     * @param HasCodeLoc     $loc
      * @param Expr\Expr[] $exprs
      */
-    public function __construct(CodeLoc $loc, array $exprs) {
+    public function __construct(HasCodeLoc $loc, array $exprs) {
         parent::__construct($loc);
         $this->exprs = $exprs;
     }
@@ -202,7 +202,7 @@ class For_ extends ControlStructure {
     /** @var Stmt\Block */
     private $body;
 
-    public function __construct(CodeLoc $loc, ForComma $init, ForComma $cond, ForComma $loop, Stmt\Block $body) {
+    public function __construct(HasCodeLoc $loc, ForComma $init, ForComma $cond, ForComma $loop, Stmt\Block $body) {
         parent::__construct($loc);
         $this->init = $init;
         $this->cond = $cond;
@@ -238,11 +238,11 @@ class Switch_ extends ControlStructure {
     private $cases;
 
     /**
-     * @param CodeLoc      $loc
+     * @param HasCodeLoc      $loc
      * @param Expr\Expr    $expr
      * @param SwitchCase[] $cases
      */
-    public function __construct(CodeLoc $loc, Expr\Expr $expr, array $cases) {
+    public function __construct(HasCodeLoc $loc, Expr\Expr $expr, array $cases) {
         parent::__construct($loc);
         $this->expr  = $expr;
         $this->cases = $cases;
@@ -277,11 +277,11 @@ class SwitchCase extends Node {
     private $stmt;
 
     /**
-     * @param CodeLoc        $loc
+     * @param HasCodeLoc        $loc
      * @param Expr\Expr|null $expr
      * @param Stmt\Block     $stmt
      */
-    public function __construct(CodeLoc $loc, Expr\Expr $expr = null, Stmt\Block $stmt) {
+    public function __construct(HasCodeLoc $loc, Expr\Expr $expr = null, Stmt\Block $stmt) {
         parent::__construct($loc);
         $this->expr = $expr;
         $this->stmt = $stmt;
@@ -310,11 +310,11 @@ class While_ extends ControlStructure {
     private $body;
 
     /**
-     * @param CodeLoc    $loc
+     * @param HasCodeLoc    $loc
      * @param Expr\Expr  $cond
      * @param Stmt\Block $body
      */
-    public function __construct(CodeLoc $loc, Expr\Expr $cond, Stmt\Block $body) {
+    public function __construct(HasCodeLoc $loc, Expr\Expr $cond, Stmt\Block $body) {
         parent::__construct($loc);
         $this->cond = $cond;
         $this->body = $body;
@@ -341,12 +341,12 @@ class Try_ extends ControlStructure {
     private $finally;
 
     /**
-     * @param CodeLoc    $loc
+     * @param HasCodeLoc    $loc
      * @param Stmt\Block $body
      * @param TryCatch[] $catches
      * @param Stmt\Block $finally
      */
-    public function __construct(CodeLoc $loc, Stmt\Block $body, array $catches, Stmt\Block $finally) {
+    public function __construct(HasCodeLoc $loc, Stmt\Block $body, array $catches, Stmt\Block $finally) {
         parent::__construct($loc);
         $this->body    = $body;
         $this->catches = $catches;
@@ -385,12 +385,12 @@ class TryCatch extends Node {
     private $body;
 
     /**
-     * @param CodeLoc    $loc
+     * @param HasCodeLoc    $loc
      * @param string     $class
      * @param string     $variable
      * @param Stmt\Block $body
      */
-    public function __construct(CodeLoc $loc, string $class, string $variable, Stmt\Block $body) {
+    public function __construct(HasCodeLoc $loc, string $class, string $variable, Stmt\Block $body) {
         parent::__construct($loc);
         $this->class    = $class;
         $this->variable = $variable;
