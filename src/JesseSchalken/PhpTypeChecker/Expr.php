@@ -2,11 +2,11 @@
 
 namespace JesseSchalken\PhpTypeChecker\Expr;
 
-use JesseSchalken\PhpTypeChecker\Type;
 use JesseSchalken\PhpTypeChecker\CodeLoc;
-use JesseSchalken\PhpTypeChecker\Node;
 use JesseSchalken\PhpTypeChecker\Function_;
+use JesseSchalken\PhpTypeChecker\Node;
 use JesseSchalken\PhpTypeChecker\Stmt;
+use JesseSchalken\PhpTypeChecker\Type;
 
 abstract class Expr extends Stmt\SingleStmt {
     public function isLValue():bool {

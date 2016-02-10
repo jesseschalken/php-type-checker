@@ -3,9 +3,9 @@
 namespace JesseSchalken\PhpTypeChecker\Call;
 
 use JesseSchalken\PhpTypeChecker\CodeLoc;
+use JesseSchalken\PhpTypeChecker\Defns\Class_;
 use JesseSchalken\PhpTypeChecker\Expr\Expr;
 use JesseSchalken\PhpTypeChecker\Node;
-use JesseSchalken\PhpTypeChecker\Defns\Class_;
 
 abstract class Call extends Expr {
     /** @var CallArg[] */

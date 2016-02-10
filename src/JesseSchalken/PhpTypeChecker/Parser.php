@@ -3,19 +3,20 @@
 namespace JesseSchalken\PhpTypeChecker\Parser;
 
 use JesseSchalken\MagicUtils\DeepClone;
+use JesseSchalken\PhpTypeChecker\Call;
 use JesseSchalken\PhpTypeChecker\CodeLoc;
-use JesseSchalken\PhpTypeChecker\LValue;
 use JesseSchalken\PhpTypeChecker\Constants;
-use JesseSchalken\PhpTypeChecker\ErrorReceiver;
+use JesseSchalken\PhpTypeChecker\ControlStructure;
 use JesseSchalken\PhpTypeChecker\Defns;
+use JesseSchalken\PhpTypeChecker\ErrorReceiver;
 use JesseSchalken\PhpTypeChecker\Expr;
 use JesseSchalken\PhpTypeChecker\Function_;
-use JesseSchalken\PhpTypeChecker\Call;
-use function JesseSchalken\PhpTypeChecker\node_sub_nodes;
-use function JesseSchalken\PhpTypeChecker\normalize_constant;
+use JesseSchalken\PhpTypeChecker\LValue;
 use JesseSchalken\PhpTypeChecker\Stmt;
 use JesseSchalken\PhpTypeChecker\Type;
 use function JesseSchalken\MagicUtils\clone_ref;
+use function JesseSchalken\PhpTypeChecker\node_sub_nodes;
+use function JesseSchalken\PhpTypeChecker\normalize_constant;
 
 abstract class DefinedNames {
     private $names = [];
@@ -443,11 +444,11 @@ final class Parser {
                             ?: Type\Type::none($codeLoc);
                         switch ($tag->getName()) {
                             case 'var':
-                                $block->add(new Stmt\LocalVariableType($codeLoc, $name, $type));
+                                $block->add(new Defns\LocalVariableType($codeLoc, $name, $type));
                                 break;
                             case 'global':
                             case 'xglobal':
-                                $block->add(new Stmt\GlobalVariableType($codeLoc, $name, $type));
+                                $block->add(new Defns\GlobalVariableType($codeLoc, $name, $type));
                                 break;
                         }
                     }
@@ -469,7 +470,7 @@ final class Parser {
 
             foreach (array_reverse($node->elseifs) as $elseIf) {
                 $loc1  = $this->locateNode($elseIf);
-                $false = new Stmt\Block($loc1, [new Stmt\If_(
+                $false = new Stmt\Block($loc1, [new ControlStructure\If_(
                     $loc1,
                     $this->parseExpr($elseIf->cond),
                     $this->parseStmts($loc1, $elseIf->stmts),
@@ -477,7 +478,7 @@ final class Parser {
                 )]);
             }
 
-            return new Stmt\If_(
+            return new ControlStructure\If_(
                 $loc,
                 $this->parseExpr($node->cond),
                 $this->parseStmts($loc, $node->stmts),
@@ -521,7 +522,7 @@ final class Parser {
             $this->addUses($node->uses, $node->type, $node->prefix);
             return new Stmt\Block($loc);
         } elseif ($node instanceof \PhpParser\Node\Stmt\Foreach_) {
-            return new Stmt\Foreach_(
+            return new ControlStructure\Foreach_(
                 $loc,
                 $this->parseExpr($node->expr),
                 $this->parseExprNull($node->keyVar),
@@ -556,11 +557,11 @@ final class Parser {
             }
             return new Stmt\Block($loc, $stmts);
         } elseif ($node instanceof \PhpParser\Node\Stmt\For_) {
-            return new Stmt\For_(
+            return new ControlStructure\For_(
                 $loc,
-                new Stmt\Comma($loc, $this->parseExprs($node->init)),
-                new Stmt\Comma($loc, $this->parseExprs($node->cond)),
-                new Stmt\Comma($loc, $this->parseExprs($node->loop)),
+                new ControlStructure\ForComma($loc, $this->parseExprs($node->init)),
+                new ControlStructure\ForComma($loc, $this->parseExprs($node->cond)),
+                new ControlStructure\ForComma($loc, $this->parseExprs($node->loop)),
                 $this->parseStmts($loc, $node->stmts)
             );
         } elseif ($node instanceof \PhpParser\Node\Stmt\Break_) {
@@ -586,13 +587,13 @@ final class Parser {
         } elseif ($node instanceof \PhpParser\Node\Stmt\Switch_) {
             $cases = [];
             foreach ($node->cases as $case) {
-                $cases[] = new Stmt\Case_(
+                $cases[] = new ControlStructure\SwitchCase(
                     $this->locateNode($case),
                     $this->parseExprNull($case->cond),
                     $this->parseStmts($loc, $case->stmts)
                 );
             }
-            return new Stmt\Switch_(
+            return new ControlStructure\Switch_(
                 $loc,
                 $this->parseExpr($node->cond),
                 $cases
@@ -600,14 +601,14 @@ final class Parser {
         } elseif ($node instanceof \PhpParser\Node\Stmt\Unset_) {
             return new Stmt\Unset_($loc, $this->parseExprs($node->vars));
         } elseif ($node instanceof \PhpParser\Node\Stmt\While_) {
-            return new Stmt\While_($loc, $this->parseExpr($node->cond), $this->parseStmts($loc, $node->stmts));
+            return new ControlStructure\While_($loc, $this->parseExpr($node->cond), $this->parseStmts($loc, $node->stmts));
         } elseif ($node instanceof \PhpParser\Node\Stmt\TryCatch) {
             $body    = $this->parseStmts($loc, $node->stmts);
             $catches = [];
             $finally = $this->parseStmts($loc, $node->finallyStmts ?: []);
 
             foreach ($node->catches as $catch) {
-                $catches[] = new Stmt\Catch_(
+                $catches[] = new ControlStructure\TryCatch(
                     $this->locateNode($catch),
                     $this->resolveClass($catch->type)->toString(),
                     $catch->var,
@@ -615,9 +616,9 @@ final class Parser {
                 );
             }
 
-            return new Stmt\Try_($loc, $body, $catches, $finally);
+            return new ControlStructure\Try_($loc, $body, $catches, $finally);
         } elseif ($node instanceof \PhpParser\Node\Stmt\Do_) {
-            return new Stmt\DoWhile(
+            return new ControlStructure\DoWhile(
                 $loc,
                 $this->parseStmts($loc, $node->stmts),
                 $this->parseExpr($node->cond)
@@ -629,7 +630,7 @@ final class Parser {
             }
             return $stmts;
         } elseif ($node instanceof \PhpParser\Node\Stmt\Label) {
-            return new Stmt\Label_($loc, $node->name);
+            return new Defns\Label_($loc, $node->name);
         } elseif ($node instanceof \PhpParser\Node\Stmt\Goto_) {
             return new Stmt\Goto_($loc, $node->name);
         } else {

@@ -2,10 +2,10 @@
 
 namespace JesseSchalken\PhpTypeChecker\Decls;
 
+use JesseSchalken\PhpTypeChecker\Function_;
+use JesseSchalken\PhpTypeChecker\Type;
 use function JesseSchalken\PhpTypeChecker\normalize_constant;
 use function JesseSchalken\PhpTypeChecker\str_ieq;
-use JesseSchalken\PhpTypeChecker\Type;
-use JesseSchalken\PhpTypeChecker\Function_;
 
 class GlobalDecls {
     /** @var Type\Type[] */

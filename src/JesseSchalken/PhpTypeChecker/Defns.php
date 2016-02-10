@@ -2,30 +2,79 @@
 
 namespace JesseSchalken\PhpTypeChecker\Defns;
 
-use function JesseSchalken\PhpTypeChecker\extract_namespace;
-use function JesseSchalken\PhpTypeChecker\remove_namespace;
+use JesseSchalken\PhpTypeChecker\CodeLoc;
 use JesseSchalken\PhpTypeChecker\Expr;
+use JesseSchalken\PhpTypeChecker\Function_;
 use JesseSchalken\PhpTypeChecker\Node;
 use JesseSchalken\PhpTypeChecker\Stmt;
-use JesseSchalken\PhpTypeChecker\CodeLoc;
 use JesseSchalken\PhpTypeChecker\Type;
-use JesseSchalken\PhpTypeChecker\Function_;
+use function JesseSchalken\PhpTypeChecker\extract_namespace;
+use function JesseSchalken\PhpTypeChecker\remove_namespace;
+
+interface HasNamespace {
+    public function namespace_():string;
+}
 
 abstract class Definition extends Stmt\SingleStmt {
-    public abstract function name():string;
-
-    public final function namespace_():string {
-        return extract_namespace($this->name());
-    }
-
-    public final function findDeclarations():array {
-        $decls   = parent::findDeclarations();
+    public final function findDefinitions():array {
+        $decls   = parent::findDefinitions();
         $decls[] = $this;
         return $decls;
     }
 }
 
-class Const_ extends Definition {
+abstract class GlobalDefinition extends Definition {
+}
+
+abstract class LocalDefinition extends Definition {
+}
+
+abstract class VariableType extends Definition {
+    /** @var string */
+    private $name;
+    /** @var Type\Type */
+    private $type;
+
+    public function __construct(CodeLoc $loc, string $name, Type\Type $type) {
+        parent::__construct($loc);
+        $this->name = $name;
+        $this->type = $type;
+    }
+
+    public function subStmts():array {
+        return [];
+    }
+
+    public function unparseStmt() {
+        return null;
+    }
+}
+
+class GlobalVariableType extends VariableType {
+}
+
+class LocalVariableType extends VariableType {
+}
+
+class Label_ extends LocalDefinition {
+    /** @var string */
+    private $name;
+
+    public function __construct(CodeLoc $loc, string $name) {
+        parent::__construct($loc);
+        $this->name = $name;
+    }
+
+    public function subStmts():array {
+        return [];
+    }
+
+    public function unparseStmt() {
+        return new \PhpParser\Node\Stmt\Label($this->name);
+    }
+}
+
+class Const_ extends GlobalDefinition implements HasNamespace {
     /** @var string */
     private $name;
     /** @var Expr\Expr */
@@ -60,9 +109,13 @@ class Const_ extends Definition {
             ]
         );
     }
+
+    public final function namespace_():string {
+        return extract_namespace($this->name());
+    }
 }
 
-class FunctionDefinition extends Definition {
+class FunctionDefinition extends GlobalDefinition implements HasNamespace {
     /** @var string */
     private $name;
     /** @var Stmt\Block|null */
@@ -100,9 +153,13 @@ class FunctionDefinition extends Definition {
             )
         );
     }
+
+    public final function namespace_():string {
+        return extract_namespace($this->name());
+    }
 }
 
-abstract class Classish extends Definition {
+abstract class Classish extends GlobalDefinition implements HasNamespace {
     private $name;
 
     public function __construct(CodeLoc $loc, string $name) {
@@ -142,6 +199,10 @@ abstract class Classish extends Definition {
             $nodes[] = $member->unparse();
         }
         return $nodes;
+    }
+
+    public final function namespace_():string {
+        return extract_namespace($this->name());
     }
 }
 

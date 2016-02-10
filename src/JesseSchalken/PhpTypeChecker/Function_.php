@@ -3,8 +3,8 @@
 namespace JesseSchalken\PhpTypeChecker\Function_;
 
 use JesseSchalken\PhpTypeChecker\CodeLoc;
-use JesseSchalken\PhpTypeChecker\Node;
 use JesseSchalken\PhpTypeChecker\Expr;
+use JesseSchalken\PhpTypeChecker\Node;
 use JesseSchalken\PhpTypeChecker\Type;
 
 class Function_ extends Node {

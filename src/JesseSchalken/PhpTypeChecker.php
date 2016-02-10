@@ -3,9 +3,9 @@
 namespace JesseSchalken\PhpTypeChecker;
 
 use JesseSchalken\PhpTypeChecker\Expr;
+use JesseSchalken\PhpTypeChecker\Parser;
 use JesseSchalken\PhpTypeChecker\Stmt;
 use JesseSchalken\PhpTypeChecker\Type;
-use JesseSchalken\PhpTypeChecker\Parser;
 
 /**
  * A location in a source file, for error reporting. Statements, expressions, types etc all wrap a CodeLoc by extending

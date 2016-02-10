@@ -3,16 +3,16 @@
 namespace JesseSchalken\PhpTypeChecker\Stmt;
 
 use JesseSchalken\PhpTypeChecker\CodeLoc;
-use JesseSchalken\PhpTypeChecker\Expr;
-use function JesseSchalken\PhpTypeChecker\extract_namespace;
-use JesseSchalken\PhpTypeChecker\Node;
-use function JesseSchalken\PhpTypeChecker\remove_namespace;
-use JesseSchalken\PhpTypeChecker\Type;
-use JesseSchalken\PhpTypeChecker\Parser;
-use JesseSchalken\PhpTypeChecker\Defns;
 use JesseSchalken\PhpTypeChecker\Decls;
+use JesseSchalken\PhpTypeChecker\Defns;
+use JesseSchalken\PhpTypeChecker\Expr;
+use JesseSchalken\PhpTypeChecker\Node;
+use JesseSchalken\PhpTypeChecker\Parser;
+use JesseSchalken\PhpTypeChecker\Type;
 use function JesseSchalken\MagicUtils\clone_ref;
+use function JesseSchalken\PhpTypeChecker\extract_namespace;
 use function JesseSchalken\PhpTypeChecker\recursive_scan2;
+use function JesseSchalken\PhpTypeChecker\remove_namespace;
 
 abstract class Stmt extends Node {
     /**
@@ -27,8 +27,10 @@ abstract class Stmt extends Node {
 
     public final function namespaces():array {
         $namespaces = [];
-        foreach ($this->findDeclarations() as $decl) {
-            $namespaces[] = $decl->namespace_();
+        foreach ($this->findDefinitions() as $decl) {
+            if ($decl instanceof Defns\HasNamespace) {
+                $namespaces[] = $decl->namespace_();
+            }
         }
         return array_unique($namespaces);
     }
@@ -36,10 +38,10 @@ abstract class Stmt extends Node {
     /**
      * @return Defns\Definition[]
      */
-    public function findDeclarations():array {
+    public function findDefinitions():array {
         $decls = [];
         foreach ($this->subStmts() as $stmt) {
-            foreach ($stmt->findDeclarations() as $decl) {
+            foreach ($stmt->findDefinitions() as $decl) {
                 $decls[] = $decl;
             }
         }
@@ -158,113 +160,6 @@ abstract class SingleStmt extends Stmt {
     public abstract function unparseStmt();
 }
 
-abstract class ControlStructure extends SingleStmt {
-}
-
-abstract class VariableType extends SingleStmt {
-    /** @var string */
-    private $name;
-    /** @var Type\Type */
-    private $type;
-
-    public function __construct(CodeLoc $loc, string $name, Type\Type $type) {
-        parent::__construct($loc);
-        $this->name = $name;
-        $this->type = $type;
-    }
-
-    public function subStmts():array {
-        return [];
-    }
-
-    public function unparseStmt() {
-        return null;
-    }
-}
-
-class GlobalVariableType extends VariableType {
-}
-
-class LocalVariableType extends VariableType {
-}
-
-class DoWhile extends ControlStructure {
-    /** @var Block */
-    private $body;
-    /** @var Expr\Expr */
-    private $cond;
-
-    /**
-     * @param CodeLoc   $loc
-     * @param Block     $body
-     * @param Expr\Expr $cond
-     */
-    public function __construct(CodeLoc $loc, Block $body, Expr\Expr $cond) {
-        parent::__construct($loc);
-        $this->body = $body;
-        $this->cond = $cond;
-    }
-
-    public function subStmts():array {
-        return [$this->body, $this->cond];
-    }
-
-    public function unparseStmt() {
-        return new \PhpParser\Node\Stmt\While_(
-            $this->cond->unparseExpr(),
-            $this->body->unparseNodes()
-        );
-    }
-}
-
-class If_ extends ControlStructure {
-    /** @var Expr\Expr */
-    private $cond;
-    /** @var Block */
-    private $true;
-    /** @var Block */
-    private $false;
-
-    public function __construct(CodeLoc $loc, Expr\Expr $cond, Block $true, Block $false) {
-        parent::__construct($loc);
-        $this->cond  = $cond;
-        $this->true  = $true;
-        $this->false = $false;
-    }
-
-    public function subStmts():array {
-        return [$this->cond, $this->true, $this->false];
-    }
-
-    public function unparseStmt() {
-        $elseIfs = [];
-        $else    = $this->false->unparseNodes();
-
-        if (count($else) == 1) {
-            $if_ = $else[0];
-            if ($if_ instanceof \PhpParser\Node\Stmt\If_) {
-                $elseIfs = array_merge(
-                    [new \PhpParser\Node\Stmt\ElseIf_(
-                        $if_->cond,
-                        $if_->stmts
-                    )],
-                    $if_->elseifs
-                );
-                $else    = $if_->else ? $if_->else->stmts : [];
-            }
-        }
-
-        return new \PhpParser\Node\Stmt\If_(
-            $this->cond->unparseExpr(),
-            [
-                'stmts'   => $this->true->unparseNodes(),
-                'elseifs' => $elseIfs,
-                'else'    => $else ? new \PhpParser\Node\Stmt\Else_($else) : null,
-            ]
-        );
-    }
-}
-
 class Return_ extends SingleStmt {
     /** @var Expr\Expr|null */
     private $expr;
@@ -298,67 +193,6 @@ class InlineHTML extends SingleStmt {
 
     public function unparseStmt() {
         return new \PhpParser\Node\Stmt\InlineHTML($this->html);
-    }
-}
-
-class Foreach_ extends ControlStructure {
-    /** @var Expr\Expr */
-    private $array;
-    /** @var Expr\Expr|null */
-    private $key;
-    /** @var Expr\Expr */
-    private $value;
-    /** @var Block */
-    private $body;
-    /** @var bool */
-    private $byRef;
-
-    /**
-     * @param CodeLoc        $loc
-     * @param Expr\Expr      $array
-     * @param Expr\Expr|null $key
-     * @param Expr\Expr      $value
-     * @param bool           $byRef
-     * @param Block          $body
-     */
-    public function __construct(
-        CodeLoc $loc,
-        Expr\Expr $array,
-        Expr\Expr $key = null,
-        Expr\Expr $value,
-        bool $byRef,
-        Block $body
-    ) {
-        parent::__construct($loc);
-        $this->array = $array;
-        $this->key   = $key;
-        $this->value = $value;
-        $this->body  = $body;
-        $this->byRef = $byRef;
-    }
-
-    public function subStmts():array {
-        $stmts = [
-            $this->array,
-            $this->value,
-            $this->body,
-        ];
-        if ($this->key) {
-            $stmts[] = $this->key;
-        }
-        return $stmts;
-    }
-
-    public function unparseStmt() {
-        return new \PhpParser\Node\Stmt\Foreach_(
-            $this->array->unparseExpr(),
-            $this->value->unparseExpr(),
-            [
-                'keyVar' => $this->key ? $this->key->unparseExpr() : null,
-                'byRef'  => $this->byRef,
-                'stmts'  => $this->body->unparseNodes(),
-            ]
-        );
     }
 }
 
@@ -445,81 +279,6 @@ class StaticVar extends SingleStmt {
     }
 }
 
-/**
- * Special statements used for the init/cond/loop parts of a for loop.
- * Is like the comma operator in C and JavaScript but can actually only
- * be used in the head of a for loop.
- */
-class Comma extends Stmt {
-    /** @var Expr\Expr[] */
-    private $exprs = [];
-
-    /**
-     * @param CodeLoc     $loc
-     * @param Expr\Expr[] $exprs
-     */
-    public function __construct(CodeLoc $loc, array $exprs) {
-        parent::__construct($loc);
-        $this->exprs = $exprs;
-    }
-
-    public function subStmts():array {
-        return $this->exprs;
-    }
-
-    /** @return \PhpParser\Node\Expr[] */
-    public function unparseNodes():array {
-        $nodes = [];
-        foreach ($this->exprs as $expr) {
-            $nodes[] = $expr->unparseExpr();
-        }
-        return $nodes;
-    }
-
-    public function split():array {
-        return $this->exprs;
-    }
-}
-
-class For_ extends ControlStructure {
-    /** @var Comma */
-    private $init;
-    /** @var Comma */
-    private $cond;
-    /** @var Comma */
-    private $loop;
-    /** @var Block */
-    private $body;
-
-    public function __construct(CodeLoc $loc, Comma $init, Comma $cond, Comma $loop, Block $body) {
-        parent::__construct($loc);
-        $this->init = $init;
-        $this->cond = $cond;
-        $this->loop = $loop;
-        $this->body = $body;
-    }
-
-    public function subStmts():array {
-        return [
-            $this->init,
-            $this->cond,
-            $this->loop,
-            $this->body,
-        ];
-    }
-
-    public function unparseStmt() {
-        return new \PhpParser\Node\Stmt\For_(
-            [
-                'init'  => $this->init->unparseNodes(),
-                'cond'  => $this->cond->unparseNodes(),
-                'loop'  => $this->loop->unparseNodes(),
-                'stmts' => $this->body->unparseNodes(),
-            ]
-        );
-    }
-}
-
 class Break_ extends SingleStmt {
     /** @var int */
     private $levels;
@@ -570,78 +329,6 @@ class Continue_ extends SingleStmt {
     }
 }
 
-class Switch_ extends ControlStructure {
-    /** @var Expr\Expr */
-    private $expr;
-    /** @var Case_[] */
-    private $cases;
-
-    /**
-     * @param CodeLoc   $loc
-     * @param Expr\Expr $expr
-     * @param Case_[]   $cases
-     */
-    public function __construct(CodeLoc $loc, Expr\Expr $expr, array $cases) {
-        parent::__construct($loc);
-        $this->expr  = $expr;
-        $this->cases = $cases;
-    }
-
-    public function subStmts():array {
-        $stmts = [$this->expr];
-        foreach ($this->cases as $case) {
-            foreach ($case->subStmts() as $stmt) {
-                $stmts[] = $stmt;
-            }
-        }
-        return $stmts;
-    }
-
-    public function unparseStmt() {
-        $cases = [];
-        foreach ($this->cases as $case) {
-            $cases[] = $case->unparse();
-        }
-        return new \PhpParser\Node\Stmt\Switch_(
-            $this->expr->unparseExpr(),
-            $cases
-        );
-    }
-}
-
-class Case_ extends Node {
-    /** @var Expr\Expr|null */
-    private $expr;
-    /** @var Block */
-    private $stmt;
-
-    /**
-     * @param CodeLoc        $loc
-     * @param Expr\Expr|null $expr
-     * @param Block          $stmt
-     */
-    public function __construct(CodeLoc $loc, Expr\Expr $expr = null, Block $stmt) {
-        parent::__construct($loc);
-        $this->expr = $expr;
-        $this->stmt = $stmt;
-    }
-
-    public function subStmts():array {
-        $stmts = [$this->stmt];
-        if ($this->expr) {
-            $stmts[] = $this->expr;
-        }
-        return $stmts;
-    }
-
-    public function unparse():\PhpParser\Node\Stmt\Case_ {
-        return new \PhpParser\Node\Stmt\Case_(
-            $this->expr ? $this->expr->unparseExpr() : null,
-            $this->stmt->unparseNodes()
-        );
-    }
-}
-
 class Unset_ extends SingleStmt {
     /** @var Expr\Expr[] */
     private $exprs;
@@ -668,113 +355,6 @@ class Unset_ extends SingleStmt {
     }
 }
 
-class While_ extends ControlStructure {
-    /** @var Expr\Expr */
-    private $cond;
-    /** @var Block */
-    private $body;
-
-    /**
-     * @param CodeLoc   $loc
-     * @param Expr\Expr $cond
-     * @param Block     $body
-     */
-    public function __construct(CodeLoc $loc, Expr\Expr $cond, Block $body) {
-        parent::__construct($loc);
-        $this->cond = $cond;
-        $this->body = $body;
-    }
-
-    public function subStmts():array {
-        return [$this->cond, $this->body];
-    }
-
-    public function unparseStmt() {
-        return new \PhpParser\Node\Stmt\While_(
-            $this->cond->unparseExpr(),
-            $this->body->unparseNodes()
-        );
-    }
-}
-
-class Try_ extends ControlStructure {
-    /** @var Block */
-    private $body;
-    /** @var Catch_[] */
-    private $catches;
-    /** @var Block */
-    private $finally;
-
-    /**
-     * @param CodeLoc  $loc
-     * @param Block    $body
-     * @param Catch_[] $catches
-     * @param Block    $finally
-     */
-    public function __construct(CodeLoc $loc, Block $body, array $catches, Block $finally) {
-        parent::__construct($loc);
-        $this->body    = $body;
-        $this->catches = $catches;
-        $this->finally = $finally;
-    }
-
-    public function subStmts():array {
-        $stmts = [$this->body];
-        foreach ($this->catches as $catch) {
-            foreach ($catch->subStmts() as $stmt) {
-                $stmts[] = $stmt;
-            }
-        }
-        return $stmts;
-    }
-
-    public function unparseStmt() {
-        $cathes = [];
-        foreach ($this->catches as $catch) {
-            $cathes[] = $catch->unparse();
-        }
-        return new \PhpParser\Node\Stmt\TryCatch(
-            $this->body->unparseNodes(),
-            $cathes,
-            $this->finally->unparseNodes() ?: null
-        );
-    }
-}
-
-class Catch_ extends Node {
-    /** @var string */
-    private $class;
-    /** @var string */
-    private $variable;
-    /** @var Block */
-    private $body;
-
-    /**
-     * @param CodeLoc $loc
-     * @param string  $class
-     * @param string  $variable
-     * @param Block   $body
-     */
-    public function __construct(CodeLoc $loc, string $class, string $variable, Block $body) {
-        parent::__construct($loc);
-        $this->class    = $class;
-        $this->variable = $variable;
-        $this->body     = $body;
-    }
-
-    public function subStmts():array {
-        return [$this->body];
-    }
-
-    public function unparse():\PhpParser\Node\Stmt\Catch_ {
-        return new \PhpParser\Node\Stmt\Catch_(
-            new \PhpParser\Node\Name\FullyQualified($this->class),
-            $this->variable,
-            $this->body->unparseNodes()
-        );
-    }
-}
-
 class Global_ extends SingleStmt {
     /** @var Expr\Expr */
     private $expr;
@@ -798,24 +378,6 @@ class Global_ extends SingleStmt {
                 $this->expr->unparseExpr(),
             ]
         );
-    }
-}
-
-class Label_ extends SingleStmt {
-    /** @var string */
-    private $name;
-
-    public function __construct(CodeLoc $loc, string $name) {
-        parent::__construct($loc);
-        $this->name = $name;
-    }
-
-    public function subStmts():array {
-        return [];
-    }
-
-    public function unparseStmt() {
-        return new \PhpParser\Node\Stmt\Label($this->name);
     }
 }
 
