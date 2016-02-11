@@ -20,9 +20,9 @@ use function JesseSchalken\PhpTypeChecker\str_ieq;
 interface TypeContext {
     public function isCompatible(string $parent, string $child):bool;
 
-    public function functionExistsNoRef(string $name):bool;
+    public function functionExists(string $name):bool;
 
-    public function methodExistsNoRef(string $class, string $method, bool $static):bool;
+    public function methodExists(string $class, string $method, bool $static):bool;
 }
 
 class DummyTypeContext implements TypeContext {
@@ -30,11 +30,11 @@ class DummyTypeContext implements TypeContext {
         return str_ieq($parent, $child);
     }
 
-    public function functionExistsNoRef(string $name):bool {
+    public function functionExists(string $name):bool {
         return false;
     }
 
-    public function methodExistsNoRef(string $class, string $method, bool $static):bool {
+    public function methodExists(string $class, string $method, bool $static):bool {
         return false;
     }
 }
@@ -53,41 +53,31 @@ abstract class Type extends PhpTypeChecker\Node {
     }
 
     public final static function union(HasCodeLoc $loc, array $types):self {
-        $union = new Union($loc);
-        foreach ($types as $type) {
-            $union = $union->addType($type, new DummyTypeContext());
-        }
-        return $union;
+        return count($types) == 1 ? $types[0] : new Union($loc, $types);
     }
 
     public final static function scalar(HasCodeLoc $loc):self {
-        return self::union(
-            $loc, [
-                new Int_($loc),
-                new String_($loc),
-                new Float_($loc),
-                new SingleValue($loc, true),
-                new SingleValue($loc, false),
-            ]
-        );
+        return self::union($loc, [
+            new Int_($loc),
+            new String_($loc),
+            new Float_($loc),
+            new SingleValue($loc, true),
+            new SingleValue($loc, false),
+        ]);
     }
 
     public final static function number(HasCodeLoc $loc):self {
-        return self::union(
-            $loc, [
-                new Int_($loc),
-                new String_($loc),
-            ]
-        );
+        return self::union($loc, [
+            new Int_($loc),
+            new String_($loc),
+        ]);
     }
 
     public final static function bool(HasCodeLoc $loc):self {
-        return self::union(
-            $loc, [
-                new SingleValue($loc, true),
-                new SingleValue($loc, false),
-            ]
-        );
+        return self::union($loc, [
+            new SingleValue($loc, true),
+            new SingleValue($loc, false),
+        ]);
     }
 
     public final static function null(HasCodeLoc $loc):self {
@@ -115,19 +105,12 @@ abstract class Type extends PhpTypeChecker\Node {
 
     public abstract function toString(bool $atomic = false):string;
 
-    public final function containsType(self $type, TypeContext $ctx):bool {
-        foreach ($type->split() as $type1) {
-            if (!$this->containsSingleType($type1, $ctx)) {
-                return false;
-            }
-        }
-        return true;
+    public abstract function containsType(Type $type, TypeContext $ctx):bool;
+
+    /** @return Type[] */
+    public function split():array {
+        return [$this];
     }
-
-    public abstract function containsSingleType(SingleType $type, TypeContext $ctx):bool;
-
-    /** @return SingleType[] */
-    public abstract function split():array;
 
     public final function __toString():string {
         return $this->toString(false);
@@ -137,32 +120,43 @@ abstract class Type extends PhpTypeChecker\Node {
         return count($this->split()) == 0;
     }
 
-    public final function addType(self $other, TypeContext $ctx):self {
-        $self = $this;
-        foreach ($other->split() as $state) {
-            $self = $self->addSingleType($state, $ctx);
+    public final function simplify(TypeContext $ctx_ = null):self {
+        $ctx   = $ctx_ ?? new DummyTypeContext;
+        $union = new Union($this);
+        foreach ($this->split() as $type) {
+            $union = $union->addType($type, $ctx);
         }
-        return $self;
+        return $union;
+    }
+
+    public final function addType(self $other, TypeContext $ctx):self {
+        if ($this->containsType($other, $ctx)) {
+            return $this;
+        } else {
+            $types   = $this->subtractType($other, $ctx)->split();
+            $types[] = $other;
+            return self::union($this, $types);
+        }
     }
 
     public final function subtractType(self $other, TypeContext $ctx):self {
-        $self = $this;
-        foreach ($other->split() as $type) {
-            $self = $self->subtractSingleType($type, $ctx);
+        $types = [];
+        foreach ($this->split() as $t) {
+            if (!$other->containsType($t, $ctx)) {
+                $types[] = $t;
+            }
         }
-        return $self;
+        return self::union($this, $types);
     }
-
-    public abstract function addSingleType(SingleType $type, TypeContext $ctx):self;
-
-    public abstract function subtractSingleType(SingleType $type, TypeContext $ctx):self;
 
     /**
      * @param self[]      $vars
      * @param TypeContext $ctx
      * @return Type
      */
-    public abstract function fillTypeVars(array $vars, TypeContext $ctx):self;
+    public function fillTypeVars(array $vars, TypeContext $ctx):self {
+        return $this;
+    }
 
     public function isCallableMethodOf(Type $type, TypeContext $ctx):bool {
         return false;
@@ -175,203 +169,20 @@ abstract class Type extends PhpTypeChecker\Node {
     /**
      * @param TypeContext   $ctx
      * @param ErrorReceiver $errors
-     * @return array|\string[]
+     * @return string[]
      */
-    public final function asString(TypeContext $ctx, ErrorReceiver $errors) {
-        if (!$this->canCastToString($ctx)) {
-            $errors->add("Cannot cast {$this->toString()} to string", $this);
-        }
-        return $this->asString_($ctx);
-    }
-
-    public function asString_(TypeContext $ctx) {
+    public function asString(TypeContext $ctx, ErrorReceiver $errors) {
+        $errors->add("Cannot cast {$this->toString()} to string", $this);
         return [null];
-    }
-
-    public function canCastToString(TypeContext $ctx):bool {
-        return false;
-    }
-
-    public function canUseAsArrayKey():bool {
-        return false;
     }
 
     /**
      * @param ErrorReceiver $errors
      * @return string[]
      */
-    public final function asArrayKey(ErrorReceiver $errors):array {
-        if (!$this->canUseAsArrayKey()) {
-            $errors->add("Cannot use {$this->toString()} as array key", $this);
-        }
-        return $this->asArrayKey_();
-    }
-
-    public function asArrayKey_():array {
+    public function asArrayKey(ErrorReceiver $errors) {
+        $errors->add("Cannot use {$this->toString()} as array key", $this);
         return [null];
-    }
-}
-
-final class Union extends Type {
-    /** @var SingleType[] */
-    private $types = [];
-
-    public function toTypeHint() {
-        if (count($this->types) == 1) {
-            return $this->types[0]->toTypeHint();
-        } else {
-            return null;
-        }
-    }
-
-    public function containsSingleType(SingleType $type, TypeContext $ctx):bool {
-        foreach ($this->types as $t) {
-            if ($t->containsSingleType($type, $ctx)) {
-                return true;
-            }
-        }
-        return false;
-    }
-
-    /** @return SingleType[] */
-    public function split():array {
-        return $this->types;
-    }
-
-    public final function subtractSingleType(SingleType $type, TypeContext $ctx):self {
-        $clone = clone $this;
-        foreach ($clone->types as $k => $t) {
-            if ($type->containsSingleType($t, $ctx)) {
-                unset($clone->types[$k]);
-            }
-        }
-        return $clone;
-    }
-
-    public final function addSingleType(SingleType $type, TypeContext $ctx):Type {
-        foreach ($this->types as $t) {
-            if ($t->containsSingleType($type, $ctx)) {
-                return $this;
-            }
-        }
-        $clone          = clone $this->subtractSingleType($type, $ctx);
-        $clone->types[] = $type;
-        return $clone;
-    }
-
-    public final function toString(bool $atomic = false):string {
-        $parts = [];
-        foreach ($this->split() as $state) {
-            $parts[$state->toString($atomic)] = true;
-        }
-        switch (count($parts)) {
-            case 0:
-                return '()';
-            case 1:
-                return array_keys($parts)[0];
-            default:
-                // Convert true|false to bool
-                if (
-                    isset($parts['true']) &&
-                    isset($parts['false'])
-                ) {
-                    $parts['bool'] = true;
-                    unset($parts['true']);
-                    unset($parts['false']);
-                }
-
-                $parts = array_keys($parts);
-                sort($parts, SORT_STRING);
-                $join = join('|', $parts);
-                return $atomic ? "($join)" : $join;
-        }
-    }
-
-    public function fillTypeVars(array $vars, TypeContext $ctx):self {
-        $union = new self($this->loc());
-        foreach ($this->types as $type) {
-            $union = $union->addType($type->fillTypeVars($vars, $ctx), $ctx);
-        }
-        return $union;
-    }
-
-    public function isCallableMethodOf(Type $type, TypeContext $ctx):bool {
-        foreach ($this->types as $t) {
-            if (!$t->isCallableMethodOf($type, $ctx)) {
-                return false;
-            }
-        }
-        return true;
-    }
-
-    public function hasCallableMethod(string $method, TypeContext $ctx):bool {
-        foreach ($this->types as $t) {
-            if (!$t->hasCallableMethod($method, $ctx)) {
-                return false;
-            }
-        }
-        return true;
-    }
-
-    public function asString_(TypeContext $ctx):array {
-        $strings = [];
-        foreach ($this->types as $t) {
-            $strings = array_merge($strings, $t->asString_($ctx));
-        }
-        return $strings;
-    }
-
-    public function canCastToString(TypeContext $ctx):bool {
-        foreach ($this->types as $t) {
-            if (!$t->canCastToString($ctx)) {
-                return false;
-            }
-        }
-        return true;
-    }
-}
-
-abstract class SingleType extends Type {
-    public final function split():array {
-        return [$this];
-    }
-
-    public final function addSingleType(SingleType $type, TypeContext $ctx):Type {
-        return (new Union($this->loc()))
-            ->addSingleType($type, $ctx)
-            ->addSingleType($this, $ctx);
-    }
-
-    public final function subtractSingleType(SingleType $type, TypeContext $ctx):Type {
-        if ($type->containsSingleType($this, $ctx)) {
-            return Type::none($type->loc());
-        } else {
-            return $this;
-        }
-    }
-
-    public abstract function containedByTypeVar(string $var, TypeContext $ctx):bool;
-
-    public abstract function containedByConcreteType(ConcreteType $type, TypeContext $ctx):bool;
-}
-
-abstract class ConcreteType extends SingleType {
-    public abstract function containsConcreteType(ConcreteType $type, TypeContext $ctx):bool;
-
-    public function containedByTypeVar(string $var, TypeContext $ctx):bool {
-        return false;
-    }
-
-    public final function containedByConcreteType(ConcreteType $type, TypeContext $ctx):bool {
-        return $type->containsConcreteType($this, $ctx);
-    }
-
-    public final function containsSingleType(SingleType $type, TypeContext $ctx):bool {
-        return $type->containedByConcreteType($this, $ctx);
-    }
-
-    public final function fillTypeVars(array $vars, TypeContext $ctx):self {
-        return $this;
     }
 
     public function isCallable(TypeContext $ctx):bool {
@@ -410,6 +221,14 @@ abstract class ConcreteType extends SingleType {
         return false;
     }
 
+    public function isFalsy():bool {
+        return false;
+    }
+
+    public function isTruthy():bool {
+        return false;
+    }
+
     public function isArrayOf(Type $type, TypeContext $ctx):bool {
         return false;
     }
@@ -430,9 +249,232 @@ abstract class ConcreteType extends SingleType {
     public function isClass(string $class, TypeContext $ctx):bool {
         return false;
     }
+
+    public function isTypeVar(string $var):bool {
+        return false;
+    }
 }
 
-class TypeVar extends SingleType {
+class Union extends Type {
+    /** @var Type[] */
+    private $types = [];
+
+    /**
+     * @param HasCodeLoc $loc
+     * @param Type[]     $types
+     */
+    public function __construct(HasCodeLoc $loc, array $types = []) {
+        parent::__construct($loc);
+        $this->types = $types;
+    }
+
+    public function toTypeHint() {
+        $types = $this->simplify()->split();
+        if (count($types) == 1) {
+            return $types[0]->toTypeHint();
+        } else {
+            return null;
+        }
+    }
+
+    public function containsType(Type $type, TypeContext $ctx):bool {
+        foreach ($this->types as $t) {
+            if ($t->containsType($type, $ctx)) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    /** @return Type[] */
+    public function split():array {
+        $types = [];
+        foreach ($this->types as $t) {
+            // Recurse just in case the Union contains a Union
+            foreach ($t->split() as $t2) {
+                $types[] = $t2;
+            }
+        }
+        return $types;
+    }
+
+    public final function toString(bool $atomic = false):string {
+        $parts = [];
+        foreach ($this->simplify()->split() as $type) {
+            $parts[$type->toString(false)] = true;
+        }
+        switch (count($parts)) {
+            case 0:
+                return '()';
+            case 1:
+                return array_keys($parts)[0];
+            default:
+                // Convert true|false to bool
+                if (
+                    isset($parts['true']) &&
+                    isset($parts['false'])
+                ) {
+                    $parts['bool'] = true;
+                    unset($parts['true']);
+                    unset($parts['false']);
+                }
+
+                ksort($parts, SORT_STRING);
+                $join = join('|', array_keys($parts));
+                return $atomic ? "($join)" : $join;
+        }
+    }
+
+    public function fillTypeVars(array $vars, TypeContext $ctx):self {
+        $clone = clone $this;
+        foreach ($clone->types as &$v) {
+            $v = $v->fillTypeVars($vars, $ctx);
+        }
+        return $clone;
+    }
+
+    public function isCallableMethodOf(Type $type, TypeContext $ctx):bool {
+        return $this->all(function (Type $t) use ($type, $ctx) {
+            return $t->isCallableMethodOf($type, $ctx);
+        });
+    }
+
+    public function hasCallableMethod(string $method, TypeContext $ctx):bool {
+        return $this->all(function (Type $t) use ($method, $ctx) {
+            return $t->hasCallableMethod($method, $ctx);
+        });
+    }
+
+    public function asString(TypeContext $ctx, ErrorReceiver $errors):array {
+        $strings = [];
+        foreach ($this->types as $t) {
+            foreach ($t->asString($ctx, $errors) as $string) {
+                $strings[] = $string;
+            }
+        }
+        return $strings;
+    }
+
+    public function asArrayKey(ErrorReceiver $errors):array {
+        $keys = [];
+        foreach ($this->types as $t) {
+            foreach ($t->asArrayKey($errors) as $key) {
+                $keys[] = $key;
+            }
+        }
+        return $keys;
+    }
+
+    public function isCallable(TypeContext $ctx):bool {
+        return $this->all(function (Type $t) use ($ctx) {
+            return $t->isCallable($ctx);
+        });
+    }
+
+    public function isSingleValue($value):bool {
+        return $this->all(function (Type $t) use ($value) {
+            return $t->isSingleValue($value);
+        });
+    }
+
+    public function isString():bool {
+        return $this->all(function (Type $t) {
+            return $t->isString();
+        });
+    }
+
+    public function isFloat():bool {
+        return $this->all(function (Type $t) {
+            return $t->isFloat();
+        });
+    }
+
+    public function isNull():bool {
+        return $this->all(function (Type $t) {
+            return $t->isNull();
+        });
+    }
+
+    public function isFalsy():bool {
+        return $this->all(function (Type $t) {
+            return $t->isFalsy();
+        });
+    }
+
+    public function isTruthy():bool {
+        return $this->all(function (Type $t) {
+            return $t->isTruthy();
+        });
+    }
+
+    public function isBool():bool {
+        return $this->all(function (Type $t) {
+            return $t->isBool();
+        });
+    }
+
+    public function isInt():bool {
+        return $this->all(function (Type $t) {
+            return $t->isInt();
+        });
+    }
+
+    public function isResource():bool {
+        return $this->all(function (Type $t) {
+            return $t->isResource();
+        });
+    }
+
+    public function isArrayOf(Type $type, TypeContext $ctx):bool {
+        return $this->all(function (Type $t) use ($type, $ctx) {
+            return $t->isArrayOf($type, $ctx);
+        });
+    }
+
+    public function isShape(array $keys, TypeContext $ctx):bool {
+        return $this->all(function (Type $t) use ($keys, $ctx) {
+            return $t->isShape($keys, $ctx);
+        });
+    }
+
+    public function isObject():bool {
+        return $this->all(function (Type $t) {
+            return $t->isObject();
+        });
+    }
+
+    public function isClass(string $class, TypeContext $ctx):bool {
+        return $this->all(function (Type $t) use ($class, $ctx) {
+            return $t->isClass($class, $ctx);
+        });
+    }
+
+    public function all(callable $f):bool {
+        foreach ($this->types as $t) {
+            if (!$f($t)) {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    public function any(callable $f):bool {
+        foreach ($this->types as $t) {
+            if ($f($t)) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    public function isTypeVar(string $var):bool {
+        return $this->all(function (Type $t) use ($var) {
+            return $t->isTypeVar($var);
+        });
+    }
+}
+
+class TypeVar extends Type {
     const THIS   = '$this';
     const STATIC = 'static';
 
@@ -463,25 +505,76 @@ class TypeVar extends SingleType {
         return $this->var;
     }
 
-    public function containedByTypeVar(string $var, TypeContext $ctx):bool {
+    public function isFalsy():bool {
+        return $this->type->isFalsy();
+    }
+
+    public function isTruthy():bool {
+        return $this->type->isTruthy();
+    }
+
+    public function containsType(Type $type, TypeContext $ctx):bool {
+        return $type->isTypeVar($this->var);
+    }
+
+    public function isTypeVar(string $var):bool {
         return $this->var === $var;
     }
 
-    public function containsSingleType(SingleType $type, TypeContext $ctx):bool {
-        return $type->containedByTypeVar($this->var, $ctx);
+    public function asArrayKey(ErrorReceiver $errors):array {
+        return $this->type->asArrayKey($errors);
     }
 
-    public function containedByConcreteType(ConcreteType $type, TypeContext $ctx):bool {
-        return $type->containsType($this->type, $ctx);
+    public function isCallable(TypeContext $ctx):bool {
+        return $this->type->isCallable($ctx);
+    }
+
+    public function isSingleValue($value):bool {
+        return $this->type->isSingleValue($value);
+    }
+
+    public function isString():bool {
+        return $this->type->isString();
+    }
+
+    public function isFloat():bool {
+        return $this->type->isFloat();
+    }
+
+    public function isNull():bool {
+        return $this->type->isNull();
+    }
+
+    public function isBool():bool {
+        return $this->type->isBool();
+    }
+
+    public function isInt():bool {
+        return $this->type->isInt();
+    }
+
+    public function isResource():bool {
+        return $this->type->isResource();
+    }
+
+    public function isArrayOf(Type $type, TypeContext $ctx):bool {
+        return $this->type->isArrayOf($type, $ctx);
+    }
+
+    public function isShape(array $keys, TypeContext $ctx):bool {
+        return $this->type->isShape($keys, $ctx);
+    }
+
+    public function isObject():bool {
+        return $this->type->isObject();
+    }
+
+    public function isClass(string $class, TypeContext $ctx):bool {
+        return $this->type->isClass($class, $ctx);
     }
 
     public function fillTypeVars(array $vars, TypeContext $ctx):self {
-        if (isset($vars[$this->var])) {
-            // TODO make sure the type matches $this->type
-            return $vars[$this->var];
-        } else {
-            return $this;
-        }
+        return $vars[$this->var] ?? $this;
     }
 
     public function isCallableMethodOf(Type $type, TypeContext $ctx):bool {
@@ -492,31 +585,27 @@ class TypeVar extends SingleType {
         return $this->type->hasCallableMethod($method, $ctx);
     }
 
-    public function asString_(TypeContext $ctx):array {
-        return $this->type->asString_($ctx);
-    }
-
-    public function canCastToString(TypeContext $ctx):bool {
-        return $this->type->canCastToString($ctx);
+    public function asString(TypeContext $ctx, ErrorReceiver $errors):array {
+        return $this->type->asString($ctx, $errors);
     }
 }
 
-class Mixed extends ConcreteType {
+class Mixed extends Type {
     public function toString(bool $atomic = false):string {
         return 'mixed';
     }
 
-    public function containsConcreteType(ConcreteType $type, TypeContext $ctx):bool {
+    public function containsType(Type $type, TypeContext $ctx):bool {
         return true;
     }
 }
 
-class SingleValue extends ConcreteType {
+class SingleValue extends Type {
     /** @var int|string|bool|float|null */
     private $value;
 
     /**
-     * @param HasCodeLoc                    $loc
+     * @param HasCodeLoc                 $loc
      * @param int|string|float|bool|null $value
      */
     public function __construct(HasCodeLoc $loc, $value) {
@@ -561,9 +650,9 @@ class SingleValue extends ConcreteType {
         $parts = explode('::', (string)$this->value, 2);
         switch (count($parts)) {
             case 1:
-                return $ctx->functionExistsNoRef($parts[0]);
+                return $ctx->functionExists($parts[0]);
             case 2:
-                return $ctx->methodExistsNoRef($parts[0], $parts[1], true);
+                return $ctx->methodExists($parts[0], $parts[1], true);
             default:
                 return false;
         }
@@ -573,7 +662,7 @@ class SingleValue extends ConcreteType {
         return $this->value === $value;
     }
 
-    public function containsConcreteType(ConcreteType $type, TypeContext $ctx):bool {
+    public function containsType(Type $type, TypeContext $ctx):bool {
         return $type->isSingleValue($this->value);
     }
 
@@ -609,29 +698,21 @@ class SingleValue extends ConcreteType {
     public function hasCallableMethod(string $method, TypeContext $ctx):bool {
         $val = $this->value;
         if (is_string($val)) {
-            return $ctx->methodExistsNoRef($val, $method, true);
+            return $ctx->methodExists($val, $method, true);
         } else {
             return false;
         }
     }
 
-    public function canCastToString(TypeContext $ctx):bool {
-        return true;
-    }
-
-    public function asString_(TypeContext $ctx, ErrorReceiver $errors):array {
+    public function asString(TypeContext $ctx, ErrorReceiver $errors):array {
         return ["$this->value"];
     }
 
-    public function canUseAsArrayKey():bool {
-        return parent::canUseAsArrayKey();
-    }
-
-    public function asArrayKey_():array {
+    public function asArrayKey(ErrorReceiver $errors):array {
         $value = $this->value;
         switch (true) {
             case is_float($value);
-            /** @noinspection PhpMissingBreakStatementInspection */
+                /** @noinspection PhpMissingBreakStatementInspection */
             case is_bool($value);
                 $value = (int)$value;
             case is_string($value):
@@ -639,8 +720,16 @@ class SingleValue extends ConcreteType {
             case is_null($value):
                 return ["$value"];
             default:
-                return parent::asArrayKey_();
+                return parent::asArrayKey($errors);
         }
+    }
+
+    public function isFalsy():bool {
+        return !$this->value;
+    }
+
+    public function isTruthy():bool {
+        return !!$this->value;
     }
 }
 
@@ -652,7 +741,7 @@ class SingleValue extends ConcreteType {
  * - array of form [$object, 'method']
  * - array of form ['class', 'method']
  */
-class Callable_ extends ConcreteType {
+class Callable_ extends Type {
     public function toTypeHint() {
         return 'callable';
     }
@@ -665,12 +754,18 @@ class Callable_ extends ConcreteType {
         return true;
     }
 
-    public function containsConcreteType(ConcreteType $type, TypeContext $ctx):bool {
+    public function containsType(Type $type, TypeContext $ctx):bool {
         return $type->isCallable($ctx);
+    }
+
+    public function isTruthy():bool {
+        // The only possible falsy callable would be a string '0' if there is a global function called '0'.
+        // You can't actually define functions starting with digits, so that's impossible.
+        return true;
     }
 }
 
-class Float_ extends ConcreteType {
+class Float_ extends Type {
     public function toTypeHint() {
         return 'float';
     }
@@ -679,21 +774,20 @@ class Float_ extends ConcreteType {
         return 'float';
     }
 
-    public function containsConcreteType(ConcreteType $type, TypeContext $ctx):bool {
+    public function containsType(Type $type, TypeContext $ctx):bool {
         return $type->isFloat();
     }
 
-    public function canCastToString(TypeContext $ctx):bool {
-        return true;
+    public function asString(TypeContext $ctx, ErrorReceiver $errors) {
+        return [null];
     }
 
-    public function canUseAsArrayKey():bool {
-        // TODO Floats get destructively truncated to ints when used as an array key. Maybe we should disallow it?
-        return true;
+    public function asArrayKey(ErrorReceiver $errors) {
+        return [null];
     }
 }
 
-class String_ extends ConcreteType {
+class String_ extends Type {
     public function toTypeHint() {
         return 'string';
     }
@@ -706,20 +800,20 @@ class String_ extends ConcreteType {
         return true;
     }
 
-    public function containsConcreteType(ConcreteType $type, TypeContext $ctx):bool {
+    public function containsType(Type $type, TypeContext $ctx):bool {
         return $type->isString();
     }
 
-    public function canCastToString(TypeContext $ctx):bool {
-        return true;
+    public function asString(TypeContext $ctx, ErrorReceiver $errors) {
+        return [null];
     }
 
-    public function canUseAsArrayKey():bool {
-        return true;
+    public function asArrayKey(ErrorReceiver $errors) {
+        return [null];
     }
 }
 
-class Int_ extends ConcreteType {
+class Int_ extends Type {
     public function toTypeHint() {
         return 'int';
     }
@@ -732,20 +826,20 @@ class Int_ extends ConcreteType {
         return true;
     }
 
-    public function containsConcreteType(ConcreteType $type, TypeContext $ctx):bool {
+    public function containsType(Type $type, TypeContext $ctx):bool {
         return $type->isInt();
     }
 
-    public function canCastToString(TypeContext $ctx):bool {
-        return true;
+    public function asString(TypeContext $ctx, ErrorReceiver $errors) {
+        return [null];
     }
 
-    public function canUseAsArrayKey():bool {
-        return true;
+    public function asArrayKey(ErrorReceiver $errors) {
+        return [null];
     }
 }
 
-class Object extends ConcreteType {
+class Object extends Type {
     public function toTypeHint() {
         return null;
     }
@@ -758,12 +852,12 @@ class Object extends ConcreteType {
         return true;
     }
 
-    public function containsConcreteType(ConcreteType $type, TypeContext $ctx):bool {
+    public function containsType(Type $type, TypeContext $ctx):bool {
         return $type->isObject();
     }
 }
 
-class Resource extends ConcreteType {
+class Resource extends Type {
     public function toString(bool $atomic = false):string {
         return 'resource';
     }
@@ -772,21 +866,20 @@ class Resource extends ConcreteType {
         return true;
     }
 
-    public function containsConcreteType(ConcreteType $type, TypeContext $ctx):bool {
+    public function containsType(Type $type, TypeContext $ctx):bool {
         return $type->isResource();
     }
 
-    public function canCastToString(TypeContext $ctx):bool {
-        return true;
+    public function asString(TypeContext $ctx, ErrorReceiver $errors) {
+        return [null];
     }
 
-    public function canUseAsArrayKey():bool {
-        // TODO Resources get converted to int when used as an array key. Maybe we should disallow it?
-        return true;
+    public function asArrayKey(ErrorReceiver $errors) {
+        return [null];
     }
 }
 
-class Class_ extends ConcreteType {
+class Class_ extends Type {
     /** @var string */
     private $class;
 
@@ -807,20 +900,24 @@ class Class_ extends ConcreteType {
         return $ctx->isCompatible($class, $this->class);
     }
 
-    public function containsConcreteType(ConcreteType $type, TypeContext $ctx):bool {
+    public function containsType(Type $type, TypeContext $ctx):bool {
         return $type->isClass($this->class, $ctx);
     }
 
     public function hasCallableMethod(string $method, TypeContext $ctx):bool {
-        return $ctx->methodExistsNoRef($this->class, $method, false);
+        return $ctx->methodExists($this->class, $method, false);
     }
 
-    public function canCastToString(TypeContext $ctx):bool {
-        return $ctx->methodExistsNoRef($this->class, '__toString', false);
+    public function asString(TypeContext $ctx, ErrorReceiver $errors) {
+        if ($ctx->methodExists($this->class, '__toString', false)) {
+            return [null];
+        } else {
+            return parent::asString($ctx, $errors);
+        }
     }
 }
 
-class Array_ extends ConcreteType {
+class Array_ extends Type {
     /** @var Type */
     private $inner;
 
@@ -841,7 +938,7 @@ class Array_ extends ConcreteType {
         return $type->containsType($this->inner, $ctx);
     }
 
-    public function containsConcreteType(ConcreteType $type, TypeContext $ctx):bool {
+    public function containsType(Type $type, TypeContext $ctx):bool {
         return $type->isArrayOf($this->inner, $ctx);
     }
 }
@@ -849,7 +946,7 @@ class Array_ extends ConcreteType {
 /**
  * A "shape" is an array with a fixed set of (key, type) pairs.
  */
-class Shape extends ConcreteType {
+class Shape extends Type {
     /**
      * @var Type[] Mapping from keys to types
      */
@@ -857,7 +954,7 @@ class Shape extends ConcreteType {
 
     /**
      * @param HasCodeLoc $loc
-     * @param Type[]  $keys
+     * @param Type[]     $keys
      */
     public function __construct(HasCodeLoc $loc, array $keys = []) {
         parent::__construct($loc);
@@ -868,7 +965,7 @@ class Shape extends ConcreteType {
         if (isset($this->keys[$key])) {
             return $this->keys[$key];
         } else {
-            // TODO Log error
+            // TODO Log error?
             // Can't be anything
             return new Union($this->loc());
         }
@@ -924,7 +1021,7 @@ class Shape extends ConcreteType {
         return true;
     }
 
-    public function containsConcreteType(ConcreteType $type, TypeContext $ctx):bool {
+    public function containsType(Type $type, TypeContext $ctx):bool {
         return $type->isShape($this->keys, $ctx);
     }
 
@@ -949,6 +1046,14 @@ class Shape extends ConcreteType {
             }
         }
         return false;
+    }
+
+    public function isFalsy():bool {
+        return !$this->keys;
+    }
+
+    public function isTruthy():bool {
+        return !!$this->keys;
     }
 }
 

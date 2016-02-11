@@ -886,7 +886,7 @@ final class Parser {
             $default = $this->parseExprNull($param->default);
 
             if ($default && $default instanceof Constants\Literal && $default->value() === null) {
-                $type = $type->addSingleType(new Type\SingleValue($default, null), new Type\DummyTypeContext());
+                $type = $type->addType(new Type\SingleValue($default, null), new Type\DummyTypeContext());
             }
 
             $paramDefaults[$name] = $default;

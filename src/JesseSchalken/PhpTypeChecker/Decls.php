@@ -71,11 +71,11 @@ class GlobalDecls implements Type\TypeContext {
         return $class ? $class->parents : [];
     }
 
-    public function functionExistsNoRef(string $name):bool {
+    public function functionExists(string $name):bool {
         return false;
     }
 
-    public function methodExistsNoRef(string $class, string $method, bool $static):bool {
+    public function methodExists(string $class, string $method, bool $static):bool {
         return false;
     }
 
