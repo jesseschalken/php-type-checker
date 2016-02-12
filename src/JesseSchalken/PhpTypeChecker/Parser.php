@@ -416,7 +416,7 @@ final class Parser {
     }
 
     /**
-     * @param HasCodeLoc                $loc
+     * @param HasCodeLoc             $loc
      * @param \PhpParser\Node\Stmt[] $nodes
      * @return Stmt\Block
      * @throws \Exception
@@ -787,7 +787,7 @@ final class Parser {
     }
 
     /**
-     * @param HasCodeLoc                                    $loc
+     * @param HasCodeLoc                                 $loc
      * @param string                                     $string
      * @param \phpDocumentor\Reflection\DocBlock\Context $context
      * @return Type\Type|null
@@ -947,7 +947,7 @@ final class Parser {
     }
 
     /**
-     * @param HasCodeLoc                          $loc
+     * @param HasCodeLoc                       $loc
      * @param null|string|\PhpParser\Node\Name $type
      * @return Type\Type
      * @throws \Exception
@@ -1045,7 +1045,7 @@ final class Parser {
 
     /**
      * @param \PhpParser\Node\Expr|string $node
-     * @param HasCodeLoc                     $loc
+     * @param HasCodeLoc                  $loc
      * @return Expr\Expr
      * @throws \Exception
      */
@@ -1451,12 +1451,11 @@ final class Parser {
     private function parseArgs(array $args):array {
         $result = [];
         foreach ($args as $arg) {
-            $result[] = new Call\CallArg(
-                $this->locateNode($arg),
-                $this->parseExpr($arg->value),
-                $arg->byRef,
-                $arg->unpack
-            );
+            $loc = $this->locateNode($arg);
+            if ($arg->byRef) {
+                $this->errors->add("Call-time pass by reference is not supported", $loc);
+            }
+            $result[] = new Call\CallArg($loc, $this->parseExpr($arg->value), $arg->unpack);
         }
         return $result;
     }

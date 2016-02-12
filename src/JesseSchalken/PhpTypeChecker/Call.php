@@ -24,6 +24,11 @@ abstract class Call extends Expr {
         $this->args = $args;
     }
 
+    /** @return CallArg[] */
+    public function args():array {
+        return $this->args;
+    }
+
     public function subStmts():array {
         $stmts = [];
         foreach ($this->args as $arg) {
@@ -66,8 +71,15 @@ class FunctionCall extends Call {
         );
     }
 
-    public function getType(Decls\LocalDecls $locals, Decls\GlobalDecls $globals, ErrorReceiver $errors):Type\Type {
-        // TODO: Implement getType() method.
+    public function typeCheckExpr(Decls\LocalDecls $locals, Decls\GlobalDecls $globals, ErrorReceiver $errors):Type\Type {
+        return $this->function->typeCheckExpr($locals, $globals, $errors)->call(
+            $this,
+            $globals,
+            $locals,
+            $errors,
+            $this->args(),
+            false // TODO
+        );
     }
 }
 
@@ -101,7 +113,7 @@ class StaticMethodCall extends Call {
         );
     }
 
-    public function getType(Decls\LocalDecls $locals, Decls\GlobalDecls $globals, ErrorReceiver $errors):Type\Type {
+    public function typeCheckExpr(Decls\LocalDecls $locals, Decls\GlobalDecls $globals, ErrorReceiver $errors):Type\Type {
         // TODO: Implement getType() method.
     }
 }
@@ -136,7 +148,7 @@ class MethodCall extends Call {
         );
     }
 
-    public function getType(Decls\LocalDecls $locals, Decls\GlobalDecls $globals, ErrorReceiver $errors):Type\Type {
+    public function typeCheckExpr(Decls\LocalDecls $locals, Decls\GlobalDecls $globals, ErrorReceiver $errors):Type\Type {
         // TODO: Implement getType() method.
     }
 }
@@ -145,14 +157,11 @@ class CallArg extends Node {
     /** @var Expr */
     private $expr;
     /** @var bool */
-    private $byRef = false;
-    /** @var bool */
     private $splat = false;
 
-    public function __construct(HasCodeLoc $loc, Expr $expr, bool $byRef, bool $splat) {
+    public function __construct(HasCodeLoc $loc, Expr $expr, bool $splat) {
         parent::__construct($loc);
         $this->expr  = $expr;
-        $this->byRef = $byRef;
         $this->splat = $splat;
     }
 
@@ -163,7 +172,7 @@ class CallArg extends Node {
     public function unparse():\PhpParser\Node\Arg {
         return new \PhpParser\Node\Arg(
             $this->expr->unparseExpr(),
-            $this->byRef,
+            false,
             $this->splat
         );
     }
@@ -196,7 +205,7 @@ class New_ extends Call {
         );
     }
 
-    public function getType(Decls\LocalDecls $locals, Decls\GlobalDecls $globals, ErrorReceiver $errors):Type\Type {
+    public function typeCheckExpr(Decls\LocalDecls $locals, Decls\GlobalDecls $globals, ErrorReceiver $errors):Type\Type {
         // TODO: Implement getType() method.
     }
 }
@@ -223,7 +232,7 @@ class AnonymousNew extends Call {
         );
     }
 
-    public function getType(Decls\LocalDecls $locals, Decls\GlobalDecls $globals, ErrorReceiver $errors):Type\Type {
+    public function typeCheckExpr(Decls\LocalDecls $locals, Decls\GlobalDecls $globals, ErrorReceiver $errors):Type\Type {
         // TODO: Implement getType() method.
     }
 }

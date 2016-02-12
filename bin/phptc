@@ -59,7 +59,7 @@ s
     }
     $files = File::parse($contents, new class() extends ErrorReceiver {
         public function add(string $message, HasCodeLoc $loc) {
-            print $loc->loc()->format($message);
+            print $loc->loc()->format($message) . "\n";
         }
     });
     if ($output) {

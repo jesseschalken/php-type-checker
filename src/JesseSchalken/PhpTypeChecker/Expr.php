@@ -15,6 +15,14 @@ abstract class Expr extends Stmt\SingleStmt {
         return false;
     }
 
+    public function isCall():bool {
+        return false;
+    }
+
+    public final function isReferrable():bool {
+        return $this->isLValue() || $this->isCall();
+    }
+
     public final function unparseStmt() {
         return $this->unparseExpr();
     }
@@ -35,16 +43,20 @@ abstract class Expr extends Stmt\SingleStmt {
         return $this->unparseExpr();
     }
 
+    public function typeCheckStmt(Decls\GlobalDecls $globals, Decls\LocalDecls $locals, ErrorReceiver $errors) {
+        $this->typeCheckExpr($locals, $globals, $errors);
+    }
+
     /**
-     * TODO Instead of having seperate "typeCheck" and "getType" methods (which will probably end up sharing a lot of
-     * code), they should probably be merged into a single method that does both, so everything is done in a single
-     * pass, in a single method.
+     * TODO these parameters will be passed around together pretty much everywhere and should probably be bundled
+     * together in one object. Maybe DummyTypeContext, LocalDecls and ErrorReceiver can be merged into GlobalDecls to
+     * make one big Context object? Yes that sounds like a good idea.
      * @param Decls\LocalDecls  $locals
      * @param Decls\GlobalDecls $globals
      * @param ErrorReceiver     $errors
      * @return Type\Type
      */
-    public abstract function getType(Decls\LocalDecls $locals, Decls\GlobalDecls $globals, ErrorReceiver $errors):Type\Type;
+    public abstract function typeCheckExpr(Decls\LocalDecls $locals, Decls\GlobalDecls $globals, ErrorReceiver $errors):Type\Type;
 }
 
 class Yield_ extends Expr {
@@ -77,7 +89,7 @@ class Yield_ extends Expr {
         );
     }
 
-    public function getType(Decls\LocalDecls $locals, Decls\GlobalDecls $globals, ErrorReceiver $errors):Type\Type {
+    public function typeCheckExpr(Decls\LocalDecls $locals, Decls\GlobalDecls $globals, ErrorReceiver $errors):Type\Type {
         return new Type\Mixed($this->loc());
     }
 }
@@ -113,7 +125,7 @@ class Include_ extends Expr {
         return new \PhpParser\Node\Expr\Include_($this->expr->unparseExpr(), $type);
     }
 
-    public function getType(Decls\LocalDecls $locals, Decls\GlobalDecls $globals, ErrorReceiver $errors):Type\Type {
+    public function typeCheckExpr(Decls\LocalDecls $locals, Decls\GlobalDecls $globals, ErrorReceiver $errors):Type\Type {
         return new Type\Mixed($this->loc());
     }
 }
@@ -149,12 +161,12 @@ class Array_ extends Expr {
         return new \PhpParser\Node\Expr\Array_($items);
     }
 
-    public function getType(Decls\LocalDecls $locals, Decls\GlobalDecls $globals, ErrorReceiver $errors):Type\Type {
+    public function typeCheckExpr(Decls\LocalDecls $locals, Decls\GlobalDecls $globals, ErrorReceiver $errors):Type\Type {
         $shape = true;
         $types = [];
         foreach ($this->items as $item) {
-            $key = $item->key()->getType($locals, $globals, $errors)->asArrayKey($errors);
-            $val = $item->val()->getType($locals, $globals, $errors);
+            $key = $item->key()->typeCheckExpr($locals, $globals, $errors)->asArrayKey($errors);
+            $val = $item->val()->typeCheckExpr($locals, $globals, $errors);
             foreach ($key as $k) {
                 if ($k === null) {
                     $shape = false;
@@ -276,7 +288,7 @@ class Closure extends Expr {
         ]));
     }
 
-    public function getType(Decls\LocalDecls $locals, Decls\GlobalDecls $globals, ErrorReceiver $errors):Type\Type {
+    public function typeCheckExpr(Decls\LocalDecls $locals, Decls\GlobalDecls $globals, ErrorReceiver $errors):Type\Type {
         return new Type\Class_($this, 'Closure');
     }
 }
@@ -329,16 +341,16 @@ class Ternary extends Expr {
         );
     }
 
-    public function getType(Decls\LocalDecls $locals, Decls\GlobalDecls $globals, ErrorReceiver $errors):Type\Type {
+    public function typeCheckExpr(Decls\LocalDecls $locals, Decls\GlobalDecls $globals, ErrorReceiver $errors):Type\Type {
         // TODO Apply type gaurds in $this->cond
 
         if ($this->true) {
-            $true = $this->true->getType($locals, $globals, $errors);
+            $true = $this->true->typeCheckExpr($locals, $globals, $errors);
         } else {
-            $true = $this->cond->getType($locals, $globals, $errors)->removeFalsy($globals);
+            $true = $this->cond->typeCheckExpr($locals, $globals, $errors)->removeFalsy($globals);
         }
 
-        $false = $this->false->getType($locals, $globals, $errors);
+        $false = $this->false->typeCheckExpr($locals, $globals, $errors);
 
         return Type\Type::union($this, [$true, $false,]);
     }
@@ -381,7 +393,7 @@ class ConcatMany extends Expr {
         return new \PhpParser\Node\Scalar\Encapsed(self::unparseEncaps($this->exprs));
     }
 
-    public function getType(Decls\LocalDecls $locals, Decls\GlobalDecls $globals, ErrorReceiver $errors):Type\Type {
+    public function typeCheckExpr(Decls\LocalDecls $locals, Decls\GlobalDecls $globals, ErrorReceiver $errors):Type\Type {
         // TODO Make this really smart and return a SingleValue (or union thereof) if it can
         return new Type\String_($this);
     }
@@ -412,7 +424,7 @@ class Isset_ extends Expr {
         return new \PhpParser\Node\Expr\Isset_($exprs);
     }
 
-    public function getType(Decls\LocalDecls $locals, Decls\GlobalDecls $globals, ErrorReceiver $errors):Type\Type {
+    public function typeCheckExpr(Decls\LocalDecls $locals, Decls\GlobalDecls $globals, ErrorReceiver $errors):Type\Type {
         return new Type\Int_($this->loc());
     }
 }
@@ -591,7 +603,7 @@ class BinOp extends Expr {
         }
     }
 
-    public function getType(Decls\LocalDecls $locals, Decls\GlobalDecls $globals, ErrorReceiver $errors):Type\Type {
+    public function typeCheckExpr(Decls\LocalDecls $locals, Decls\GlobalDecls $globals, ErrorReceiver $errors):Type\Type {
         switch ($this->type) {
             case self:: INSTANCEOF:
                 return Type\Type::bool($this);
@@ -629,8 +641,8 @@ class BinOp extends Expr {
                 ]);
 
             case self::COALESCE:
-                $left  = $this->left->getType($locals, $globals, $errors)->removeNull($globals);
-                $right = $this->right->getType($locals, $globals, $errors);
+                $left  = $this->left->typeCheckExpr($locals, $globals, $errors)->removeNull($globals);
+                $right = $this->right->typeCheckExpr($locals, $globals, $errors);
                 return Type\Type::union($this, [$left, $right]);
 
             case self::BOOl_AND:
@@ -646,7 +658,7 @@ class BinOp extends Expr {
 
             case self::ASSIGN:
             case self::ASSIGN_REF:
-                return $this->right->getType($locals, $globals, $errors);
+                return $this->right->typeCheckExpr($locals, $globals, $errors);
 
             case self::ASSIGN_ADD:
             case self::ASSIGN_SUBTRACT:
@@ -718,7 +730,7 @@ class Cast extends Expr {
         }
     }
 
-    public function getType(Decls\LocalDecls $locals, Decls\GlobalDecls $globals, ErrorReceiver $errors):Type\Type {
+    public function typeCheckExpr(Decls\LocalDecls $locals, Decls\GlobalDecls $globals, ErrorReceiver $errors):Type\Type {
         switch ($this->type) {
             case self::INT:
                 return new Type\Int_($this);
@@ -804,7 +816,7 @@ class UnOp extends Expr {
         }
     }
 
-    public function getType(Decls\LocalDecls $locals, Decls\GlobalDecls $globals, ErrorReceiver $errors):Type\Type {
+    public function typeCheckExpr(Decls\LocalDecls $locals, Decls\GlobalDecls $globals, ErrorReceiver $errors):Type\Type {
         switch ($this->type) {
             case self::PRE_INC:
             case self::PRE_DEC:
@@ -812,7 +824,7 @@ class UnOp extends Expr {
 
             case self::POST_INC:
             case self::POST_DEC:
-                return $this->expr->getType($locals, $globals, $errors);
+                return $this->expr->typeCheckExpr($locals, $globals, $errors);
 
             case self::PRINT:
                 // "print ..." always evaluates to int(1)
@@ -829,7 +841,7 @@ class UnOp extends Expr {
                 return Type\Type::number($this);
 
             case self::SUPPRESS:
-                return $this->expr->getType($locals, $globals, $errors);
+                return $this->expr->typeCheckExpr($locals, $globals, $errors);
 
             case self::EMPTY:
                 return Type\Type::bool($this);
@@ -838,7 +850,7 @@ class UnOp extends Expr {
                 return new Type\Mixed($this);
 
             case self::CLONE:
-                return $this->expr->getType($locals, $globals, $errors);
+                return $this->expr->typeCheckExpr($locals, $globals, $errors);
 
             default:
                 throw new \Exception('Invalid unary operator type: ' . $this->type);
@@ -864,7 +876,7 @@ class Exit_ extends Expr {
         return new \PhpParser\Node\Expr\Exit_($expr);
     }
 
-    public function getType(Decls\LocalDecls $locals, Decls\GlobalDecls $globals, ErrorReceiver $errors):Type\Type {
+    public function typeCheckExpr(Decls\LocalDecls $locals, Decls\GlobalDecls $globals, ErrorReceiver $errors):Type\Type {
         // "exit" is an expression??? How do you use the result?
         return new Type\Mixed($this);
     }
@@ -891,7 +903,7 @@ class ShellExec extends Expr {
         return new \PhpParser\Node\Expr\ShellExec(ConcatMany::unparseEncaps($this->parts));
     }
 
-    public function getType(Decls\LocalDecls $locals, Decls\GlobalDecls $globals, ErrorReceiver $errors):Type\Type {
+    public function typeCheckExpr(Decls\LocalDecls $locals, Decls\GlobalDecls $globals, ErrorReceiver $errors):Type\Type {
         return new Type\String_($this);
     }
 }
@@ -944,7 +956,7 @@ class ClassName extends AbstractClassName {
         return $this->class;
     }
 
-    public function getType(Decls\LocalDecls $locals, Decls\GlobalDecls $globals, ErrorReceiver $errors):Type\Type {
+    public function typeCheckExpr(Decls\LocalDecls $locals, Decls\GlobalDecls $globals, ErrorReceiver $errors):Type\Type {
         return new Type\SingleValue($this, $this->class);
     }
 }
@@ -982,7 +994,7 @@ class StaticClassName extends AbstractClassName {
         return new \PhpParser\Node\Name('static');
     }
 
-    public function getType(Decls\LocalDecls $locals, Decls\GlobalDecls $globals, ErrorReceiver $errors):Type\Type {
+    public function typeCheckExpr(Decls\LocalDecls $locals, Decls\GlobalDecls $globals, ErrorReceiver $errors):Type\Type {
         return new Type\String_($this);
     }
 }

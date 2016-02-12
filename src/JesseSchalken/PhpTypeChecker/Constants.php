@@ -25,7 +25,7 @@ class GetConstant extends Expr\Expr {
         return new \PhpParser\Node\Expr\ConstFetch(new \PhpParser\Node\Name\FullyQualified($this->name));
     }
 
-    public function getType(Decls\LocalDecls $locals, Decls\GlobalDecls $globals, ErrorReceiver $errors):Type\Type {
+    public function typeCheckExpr(Decls\LocalDecls $locals, Decls\GlobalDecls $globals, ErrorReceiver $errors):Type\Type {
     }
 }
 
@@ -52,13 +52,13 @@ class GetClassConstant extends Expr\Expr {
         );
     }
 
-    public function getType(Decls\LocalDecls $locals, Decls\GlobalDecls $globals, ErrorReceiver $errors):Type\Type {
+    public function typeCheckExpr(Decls\LocalDecls $locals, Decls\GlobalDecls $globals, ErrorReceiver $errors):Type\Type {
         $expr = $globals->getConstant($this->const);
         if (!$expr) {
             $errors->add("Undefined constant '$this->const'", $this);
             return new Type\Mixed($this);
         } else {
-            return $expr->getType($locals, $globals, $errors);
+            return $expr->typeCheckExpr($locals, $globals, $errors);
         }
     }
 }
@@ -131,7 +131,7 @@ class GetMagicConst extends Expr\Expr {
         }
     }
 
-    public function getType(Decls\LocalDecls $locals, Decls\GlobalDecls $globals, ErrorReceiver $errors):Type\Type {
+    public function typeCheckExpr(Decls\LocalDecls $locals, Decls\GlobalDecls $globals, ErrorReceiver $errors):Type\Type {
         return new Type\SingleValue($this, $this->value);
     }
 }
@@ -205,7 +205,7 @@ class Literal extends Expr\Expr {
         return $this->value;
     }
 
-    public function getType(Decls\LocalDecls $locals, Decls\GlobalDecls $globals, ErrorReceiver $errors):Type\Type {
+    public function typeCheckExpr(Decls\LocalDecls $locals, Decls\GlobalDecls $globals, ErrorReceiver $errors):Type\Type {
         return new Type\SingleValue($this, $this->value);
     }
 }

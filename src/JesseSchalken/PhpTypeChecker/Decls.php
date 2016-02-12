@@ -2,9 +2,12 @@
 
 namespace JesseSchalken\PhpTypeChecker\Decls;
 
+use JesseSchalken\PhpTypeChecker\ErrorReceiver;
 use JesseSchalken\PhpTypeChecker\Function_;
+use JesseSchalken\PhpTypeChecker\HasCodeLoc;
 use JesseSchalken\PhpTypeChecker\Type;
 use JesseSchalken\PhpTypeChecker\Expr;
+use JesseSchalken\PhpTypeChecker\Call;
 use function JesseSchalken\PhpTypeChecker\normalize_constant;
 use function JesseSchalken\PhpTypeChecker\str_ieq;
 
@@ -71,6 +74,14 @@ class GlobalDecls implements Type\TypeContext {
         return $class ? $class->parents : [];
     }
 
+    /**
+     * @param string $name
+     * @return Function_\Function_|null
+     */
+    public function getFunction(string $name) {
+        return $this->functions[strtolower($name)] ?? null;
+    }
+
     public function functionExists(string $name):bool {
         return false;
     }
@@ -81,6 +92,25 @@ class GlobalDecls implements Type\TypeContext {
 
     public function getGlobal(string $value) {
         return $this->globals[$value] ?? null;
+    }
+
+    /**
+     * @param HasCodeLoc     $loc
+     * @param string         $name
+     * @param LocalDecls     $locals
+     * @param ErrorReceiver  $errors
+     * @param Call\CallArg[] $args
+     * @param bool           $asRef
+     * @return Type\Type
+     */
+    public function callFunction(HasCodeLoc $loc, string $name, LocalDecls $locals, ErrorReceiver $errors, array $args, bool $asRef) {
+        $function = $this->getFunction($name);
+        if ($function) {
+            return $function->call($loc, $this, $locals, $errors, $args, $asRef);
+        } else {
+            $errors->add("Undefined function '$name'", $loc);
+            return new Type\Mixed($loc);
+        }
     }
 }
 

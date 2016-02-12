@@ -17,7 +17,9 @@ class Test extends \PHPUnit_Framework_TestCase {
 function foo(string $f) {}
 foo(8);
 s
+            ,
         ]), <<<'s'
+file1.php(4,5): 8 is incompatible with string
 s
         );
     }

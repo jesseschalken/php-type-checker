@@ -30,7 +30,7 @@ class CodeLoc implements HasCodeLoc {
     }
 
     public function format(string $message):string {
-        return "$this->path($this->line,$this->column): $message\n";
+        return "$this->path($this->line,$this->column): $message";
     }
 
     public function toDocBlockLocation() {
@@ -203,7 +203,7 @@ class File extends Node {
     public function typeCheck(Decls\GlobalDecls $globals, ErrorReceiver $errors) {
         $locals = new Decls\LocalDecls();
         $this->contents->gatherLocalDecls($locals);
-        $this->contents->typeCheck($globals, $locals, $errors);
+        $this->contents->typeCheckStmt($globals, $locals, $errors);
     }
 }
 

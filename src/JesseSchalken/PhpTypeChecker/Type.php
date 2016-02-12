@@ -5,6 +5,9 @@ namespace JesseSchalken\PhpTypeChecker\Type;
 use JesseSchalken\PhpTypeChecker;
 use JesseSchalken\PhpTypeChecker\ErrorReceiver;
 use JesseSchalken\PhpTypeChecker\Expr;
+use JesseSchalken\PhpTypeChecker\Function_;
+use JesseSchalken\PhpTypeChecker\Call;
+use JesseSchalken\PhpTypeChecker\Decls;
 use JesseSchalken\PhpTypeChecker\HasCodeLoc;
 use function JesseSchalken\PhpTypeChecker\str_ieq;
 
@@ -135,6 +138,12 @@ abstract class Type extends PhpTypeChecker\Node {
 
     public final function isEmpty():bool {
         return count($this->split()) == 0;
+    }
+
+    public final function isEquivelant(self $type, TypeContext $ctx):bool {
+        return
+            $type->containsType($this, $ctx) &&
+            $this->containsType($type, $ctx);
     }
 
     /**
@@ -282,6 +291,26 @@ abstract class Type extends PhpTypeChecker\Node {
 
     public function isTypeVar(string $var):bool {
         return false;
+    }
+
+    /**
+     * @param HasCodeLoc        $loc
+     * @param Decls\GlobalDecls $globals
+     * @param Decls\LocalDecls  $locals
+     * @param ErrorReceiver     $errors
+     * @param Call\CallArg[]    $args
+     * @param bool              $asRef
+     * @return Type
+     */
+    public function call(
+        HasCodeLoc $loc,
+        Decls\GlobalDecls $globals,
+        Decls\LocalDecls $locals,
+        ErrorReceiver $errors,
+        array $args,
+        bool $asRef
+    ):self {
+        $errors->add("Cannot call $this as a function", $this);
     }
 }
 
@@ -760,6 +789,19 @@ class SingleValue extends SingleType {
     public function isTruthy():bool {
         return !!$this->value;
     }
+
+    public function call(HasCodeLoc $loc, Decls\GlobalDecls $globals, Decls\LocalDecls $locals, ErrorReceiver $errors, array $args, bool $asRef):Type {
+        $parts = explode('::', (string)$this->value, 2);
+        switch (count($parts)) {
+            case 1:
+                return $globals->callFunction($loc, $parts[0], $locals, $errors, $args, $asRef);
+            case 2:
+                // TODO
+                // return $globals->callMethod($parts[0], $parts[1], $locals, $errors, $args);
+            default:
+                return new Mixed($this);
+        }
+    }
 }
 
 /**
@@ -791,6 +833,24 @@ class Callable_ extends SingleType {
         // The only possible falsy callable would be a string '0' if there is a global function called '0'.
         // You can't actually define functions starting with digits, so that's impossible.
         return true;
+    }
+
+    /**
+     * @param HasCodeLoc        $loc
+     * @param Decls\GlobalDecls $globals
+     * @param Decls\LocalDecls  $locals
+     * @param ErrorReceiver     $errors
+     * @param Call\CallArg[]    $args
+     * @param bool              $asRef
+     * @return Type
+     */
+    public function call(HasCodeLoc $loc, Decls\GlobalDecls $globals, Decls\LocalDecls $locals, ErrorReceiver $errors, array $args, bool $asRef):Type {
+        // We don't know what the function signature is going to be, so just eval the args and return mixed
+        foreach ($args as $arg) {
+            // TODO We should at least check that unpacked parameters are array|Traversable
+            $arg->expr()->typeCheckExpr($locals, $globals, $errors);
+        }
+        return new Mixed($this);
     }
 }
 

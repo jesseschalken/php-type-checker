@@ -33,7 +33,7 @@ class Variable extends LValue {
         return new \PhpParser\Node\Expr\Variable($this->name->unparseExprOrString());
     }
 
-    public function getType(Decls\LocalDecls $locals, Decls\GlobalDecls $globals, ErrorReceiver $errors):Type\Type {
+    public function typeCheckExpr(Decls\LocalDecls $locals, Decls\GlobalDecls $globals, ErrorReceiver $errors):Type\Type {
     }
 }
 
@@ -80,7 +80,7 @@ class SuperGlobalAccess extends LValue {
         return new \PhpParser\Node\Expr\Variable($this->global->value());
     }
 
-    public function getType(Decls\LocalDecls $locals, Decls\GlobalDecls $globals, ErrorReceiver $errors):Type\Type {
+    public function typeCheckExpr(Decls\LocalDecls $locals, Decls\GlobalDecls $globals, ErrorReceiver $errors):Type\Type {
         $global = $this->global->value();
         $type   = $globals->getGlobal($global);
         if ($type === null) {
@@ -124,7 +124,7 @@ class Property extends LValue {
         );
     }
 
-    public function getType(Decls\LocalDecls $locals, Decls\GlobalDecls $globals, ErrorReceiver $errors):Type\Type {
+    public function typeCheckExpr(Decls\LocalDecls $locals, Decls\GlobalDecls $globals, ErrorReceiver $errors):Type\Type {
         // TODO: Implement getType() method.
     }
 }
@@ -156,7 +156,7 @@ class StaticProperty extends LValue {
         );
     }
 
-    public function getType(Decls\LocalDecls $locals, Decls\GlobalDecls $globals, ErrorReceiver $errors):Type\Type {
+    public function typeCheckExpr(Decls\LocalDecls $locals, Decls\GlobalDecls $globals, ErrorReceiver $errors):Type\Type {
         // TODO: Implement getType() method.
     }
 }
@@ -193,7 +193,7 @@ class ArrayAccess extends LValue {
         );
     }
 
-    public function getType(Decls\LocalDecls $locals, Decls\GlobalDecls $globals, ErrorReceiver $errors):Type\Type {
+    public function typeCheckExpr(Decls\LocalDecls $locals, Decls\GlobalDecls $globals, ErrorReceiver $errors):Type\Type {
         // TODO: Implement getType() method.
     }
 }
@@ -230,7 +230,7 @@ class List_ extends Expr\Expr {
         return new \PhpParser\Node\Expr\List_($exprs);
     }
 
-    public function getType(Decls\LocalDecls $locals, Decls\GlobalDecls $globals, ErrorReceiver $errors):Type\Type {
+    public function typeCheckExpr(Decls\LocalDecls $locals, Decls\GlobalDecls $globals, ErrorReceiver $errors):Type\Type {
         $items = [];
         foreach ($this->exprs as $k => $v) {
             if ($v) {

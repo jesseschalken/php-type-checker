@@ -69,9 +69,15 @@ abstract class Stmt extends Node {
         }
     }
 
-    public function typeCheck(Decls\GlobalDecls $globals, Decls\LocalDecls $locals, ErrorReceiver $errors) {
+    /**
+     * @param Decls\GlobalDecls $globals
+     * @param Decls\LocalDecls  $locals
+     * @param ErrorReceiver     $errors
+     * @return void
+     */
+    public function typeCheckStmt(Decls\GlobalDecls $globals, Decls\LocalDecls $locals, ErrorReceiver $errors) {
         foreach ($this->subStmts() as $stmt) {
-            $stmt->typeCheck($globals, $locals, $errors);
+            $stmt->typeCheckStmt($globals, $locals, $errors);
         }
     }
 }
@@ -81,7 +87,7 @@ class Block extends Stmt {
     private $stmts;
 
     /**
-     * @param HasCodeLoc      $loc
+     * @param HasCodeLoc   $loc
      * @param SingleStmt[] $stmts
      */
     public function __construct(HasCodeLoc $loc, array $stmts = []) {
@@ -231,7 +237,7 @@ class Echo_ extends SingleStmt {
     private $exprs;
 
     /**
-     * @param HasCodeLoc     $loc
+     * @param HasCodeLoc  $loc
      * @param Expr\Expr[] $exprs
      */
     public function __construct(HasCodeLoc $loc, array $exprs) {
@@ -257,8 +263,8 @@ class Throw_ extends SingleStmt {
     private $expr;
 
     /**
-     * @param HasCodeLoc   $loc
-     * @param Expr\Expr $expr
+     * @param HasCodeLoc $loc
+     * @param Expr\Expr  $expr
      */
     public function __construct(HasCodeLoc $loc, Expr\Expr $expr) {
         parent::__construct($loc);
@@ -283,7 +289,7 @@ class StaticVar extends SingleStmt {
     private $value;
 
     /**
-     * @param HasCodeLoc        $loc
+     * @param HasCodeLoc     $loc
      * @param string         $name
      * @param Expr\Expr|null $value
      */
@@ -315,7 +321,7 @@ class Break_ extends SingleStmt {
 
     /**
      * @param HasCodeLoc $loc
-     * @param int     $levels
+     * @param int        $levels
      */
     public function __construct(HasCodeLoc $loc, int $levels = 1) {
         parent::__construct($loc);
@@ -340,7 +346,7 @@ class Continue_ extends SingleStmt {
 
     /**
      * @param HasCodeLoc $loc
-     * @param int     $levels
+     * @param int        $levels
      */
     public function __construct(HasCodeLoc $loc, int $levels) {
         parent::__construct($loc);
@@ -364,7 +370,7 @@ class Unset_ extends SingleStmt {
     private $exprs;
 
     /**
-     * @param HasCodeLoc     $loc
+     * @param HasCodeLoc  $loc
      * @param Expr\Expr[] $exprs
      */
     public function __construct(HasCodeLoc $loc, array $exprs) {
@@ -390,8 +396,8 @@ class Global_ extends SingleStmt {
     private $expr;
 
     /**
-     * @param HasCodeLoc   $loc
-     * @param Expr\Expr $expr
+     * @param HasCodeLoc $loc
+     * @param Expr\Expr  $expr
      */
     public function __construct(HasCodeLoc $loc, Expr\Expr $expr) {
         parent::__construct($loc);
@@ -403,11 +409,9 @@ class Global_ extends SingleStmt {
     }
 
     public function unparseStmt() {
-        return new \PhpParser\Node\Stmt\Global_(
-            [
-                $this->expr->unparseExpr(),
-            ]
-        );
+        return new \PhpParser\Node\Stmt\Global_([
+            $this->expr->unparseExpr(),
+        ]);
     }
 }
 
@@ -426,5 +430,12 @@ class Goto_ extends SingleStmt {
 
     public function unparseStmt() {
         return new \PhpParser\Node\Stmt\Goto_($this->name);
+    }
+
+    public function typeCheckStmt(Decls\GlobalDecls $globals, Decls\LocalDecls $locals, ErrorReceiver $errors) {
+        if (!$locals->hasLabel($this->name)) {
+            $errors->add("Undefined label '$this->name'", $this);
+        }
+        parent::typeCheckStmt($globals, $locals, $errors);
     }
 }
