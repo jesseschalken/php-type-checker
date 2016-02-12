@@ -298,6 +298,10 @@ final class NamespaceContext {
         clone_ref($this->useConstant);
     }
 
+    public function prefixName(string $name):string {
+        return \PhpParser\Node\Name::concat($this->namespace, $name)->toString();
+    }
+
     public function getNamespace():string {
         return $this->namespace->toString();
     }
@@ -636,7 +640,7 @@ final class Parser {
     }
 
     private function prefixName(string $name):string {
-        return \PhpParser\Node\Name::concat($this->namespace, $name)->toString();
+        return $this->namespace->prefixName($name);
     }
 
     /**

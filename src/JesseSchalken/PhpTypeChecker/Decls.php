@@ -140,7 +140,7 @@ abstract class ClassMembers {
      */
     public abstract function get(string $name);
 
-    public abstract function fromClass(ClassDecl $class):self;
+    public abstract function fromClass(ClassDecl $class):ClassMembers;
 
     /**
      * @param string      $self
@@ -177,7 +177,7 @@ class ClassProperties extends ClassMembers {
         $this->properties[$name] = $dfn;
     }
 
-    public function fromClass(ClassDecl $class):self {
+    public function fromClass(ClassDecl $class):ClassMembers {
         return $class->properties;
     }
 }
@@ -193,7 +193,7 @@ class ClassMethods extends ClassMembers {
         $this->methods[strtolower($method)] = $obj;
     }
 
-    public function fromClass(ClassDecl $class):self {
+    public function fromClass(ClassDecl $class):ClassMembers {
         return $class->constants;
     }
 }
@@ -209,7 +209,7 @@ class ClassConstants extends ClassMembers {
         $this->constants[$name] = $type;
     }
 
-    public function fromClass(ClassDecl $class):self {
+    public function fromClass(ClassDecl $class):ClassMembers {
         return $class->constants;
     }
 }

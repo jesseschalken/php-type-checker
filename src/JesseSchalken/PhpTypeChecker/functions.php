@@ -48,9 +48,9 @@ function normalize_constant(string $name):string {
 
 /**
  * @param string[] $phpFiles
- * @return string[]
+ * @return string
  */
-function type_check(array $phpFiles):array {
+function type_check(array $phpFiles):string {
     $errors = new class () extends ErrorReceiver {
         public $errors = [];
 
@@ -66,7 +66,7 @@ function type_check(array $phpFiles):array {
     foreach ($files as $file) {
         $file->typeCheck($defns, $errors);
     }
-    return $errors->errors;
+    return join("\n", $errors->errors);
 }
 
 function extract_namespace(string $name):string {

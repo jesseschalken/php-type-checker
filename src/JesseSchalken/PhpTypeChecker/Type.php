@@ -345,7 +345,7 @@ class Union extends Type {
         }
     }
 
-    public function fillTypeVars(array $vars, TypeContext $ctx):self {
+    public function fillTypeVars(array $vars, TypeContext $ctx):Type {
         $clone = clone $this;
         foreach ($clone->types as &$v) {
             $v = $v->fillTypeVars($vars, $ctx);
@@ -602,7 +602,7 @@ class TypeVar extends SingleType {
         return $this->type->isClass($class, $ctx);
     }
 
-    public function fillTypeVars(array $vars, TypeContext $ctx):self {
+    public function fillTypeVars(array $vars, TypeContext $ctx):Type {
         return $vars[$this->var] ?? $this;
     }
 
