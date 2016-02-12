@@ -278,12 +278,9 @@ class Union extends Type {
     }
 
     public function containsType(Type $type, TypeContext $ctx):bool {
-        foreach ($this->types as $t) {
-            if ($t->containsType($type, $ctx)) {
-                return true;
-            }
-        }
-        return false;
+        return $this->any(function (Type $t) use ($type, $ctx) {
+            return $t->containsType($type, $ctx);
+        });
     }
 
     /** @return Type[] */
