@@ -2,10 +2,10 @@
 
 namespace JesseSchalken\PhpTypeChecker\Expr;
 
-use JesseSchalken\PhpTypeChecker\HasCodeLoc;
 use JesseSchalken\PhpTypeChecker\Decls;
 use JesseSchalken\PhpTypeChecker\ErrorReceiver;
 use JesseSchalken\PhpTypeChecker\Function_;
+use JesseSchalken\PhpTypeChecker\HasCodeLoc;
 use JesseSchalken\PhpTypeChecker\Node;
 use JesseSchalken\PhpTypeChecker\Stmt;
 use JesseSchalken\PhpTypeChecker\Type;
@@ -35,6 +35,15 @@ abstract class Expr extends Stmt\SingleStmt {
         return $this->unparseExpr();
     }
 
+    /**
+     * TODO Instead of having seperate "typeCheck" and "getType" methods (which will probably end up sharing a lot of
+     * code), they should probably be merged into a single method that does both, so everything is done in a single
+     * pass, in a single method.
+     * @param Decls\LocalDecls  $locals
+     * @param Decls\GlobalDecls $globals
+     * @param ErrorReceiver     $errors
+     * @return Type\Type
+     */
     public abstract function getType(Decls\LocalDecls $locals, Decls\GlobalDecls $globals, ErrorReceiver $errors):Type\Type;
 }
 
@@ -114,7 +123,7 @@ class Array_ extends Expr {
     private $items = [];
 
     /**
-     * @param HasCodeLoc     $loc
+     * @param HasCodeLoc  $loc
      * @param ArrayItem[] $items
      */
     public function __construct(HasCodeLoc $loc, array $items) {
@@ -171,10 +180,10 @@ class ArrayItem extends Node {
     private $byRef;
 
     /**
-     * @param HasCodeLoc   $loc
-     * @param Expr|null $key
-     * @param Expr      $value
-     * @param bool      $byByRef
+     * @param HasCodeLoc $loc
+     * @param Expr|null  $key
+     * @param Expr       $value
+     * @param bool       $byByRef
      */
     public function __construct(HasCodeLoc $loc, Expr $key = null, Expr $value, bool $byByRef) {
         parent::__construct($loc);
@@ -222,7 +231,7 @@ class Closure extends Expr {
     private $body;
 
     /**
-     * @param HasCodeLoc             $loc
+     * @param HasCodeLoc          $loc
      * @param bool                $static
      * @param Function_\Function_ $type
      * @param ClosureUse[]        $uses
@@ -357,7 +366,7 @@ class ConcatMany extends Expr {
 
     /**
      * @param HasCodeLoc $loc
-     * @param Expr[]  $exprs
+     * @param Expr[]     $exprs
      */
     public function __construct(HasCodeLoc $loc, array $exprs) {
         parent::__construct($loc);
@@ -384,7 +393,7 @@ class Isset_ extends Expr {
 
     /**
      * @param HasCodeLoc $loc
-     * @param Expr[]  $exprs
+     * @param Expr[]     $exprs
      */
     public function __construct(HasCodeLoc $loc, array $exprs) {
         parent::__construct($loc);
@@ -584,7 +593,7 @@ class BinOp extends Expr {
 
     public function getType(Decls\LocalDecls $locals, Decls\GlobalDecls $globals, ErrorReceiver $errors):Type\Type {
         switch ($this->type) {
-            case self::INSTANCEOF:
+            case self:: INSTANCEOF:
                 return Type\Type::bool($this);
 
             case self::ADD:
@@ -867,7 +876,7 @@ class ShellExec extends Expr {
 
     /**
      * @param HasCodeLoc $loc
-     * @param Expr[]  $parts
+     * @param Expr[]     $parts
      */
     public function __construct(HasCodeLoc $loc, array $parts) {
         parent::__construct($loc);

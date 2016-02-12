@@ -3,9 +3,9 @@
 namespace JesseSchalken\PhpTypeChecker\Type;
 
 use JesseSchalken\PhpTypeChecker;
-use JesseSchalken\PhpTypeChecker\HasCodeLoc;
 use JesseSchalken\PhpTypeChecker\ErrorReceiver;
 use JesseSchalken\PhpTypeChecker\Expr;
+use JesseSchalken\PhpTypeChecker\HasCodeLoc;
 use function JesseSchalken\PhpTypeChecker\str_ieq;
 
 \phpDocumentor\Reflection\DocBlock\Tag::registerTagHandler(
@@ -22,6 +22,13 @@ interface TypeContext {
 
     public function functionExists(string $name):bool;
 
+    /**
+     * @param string $class
+     * @param string $method
+     * @param bool   $static If true, non-static methods are excluded, because they (generally) shouldn't be called
+     *                       statically.
+     * @return bool
+     */
     public function methodExists(string $class, string $method, bool $static):bool;
 }
 
@@ -40,6 +47,11 @@ class DummyTypeContext implements TypeContext {
 }
 
 abstract class Type extends PhpTypeChecker\Node {
+    /**
+     * @deprecated Do something with the isFalsy() method on a Type instead.
+     * @param HasCodeLoc $loc
+     * @return Type
+     */
     public final static function falsy(HasCodeLoc $loc):self {
         return self::union($loc, [
             new SingleValue($loc, ''),
@@ -52,6 +64,11 @@ abstract class Type extends PhpTypeChecker\Node {
         ]);
     }
 
+    /**
+     * @param HasCodeLoc   $loc
+     * @param SingleType[] $types
+     * @return Type
+     */
     public final static function union(HasCodeLoc $loc, array $types):self {
         return count($types) == 1 ? $types[0] : new Union($loc, $types);
     }
@@ -107,10 +124,10 @@ abstract class Type extends PhpTypeChecker\Node {
 
     public abstract function containsType(Type $type, TypeContext $ctx):bool;
 
-    /** @return Type[] */
-    public function split():array {
-        return [$this];
-    }
+    /**
+     * @return SingleType[]
+     */
+    public abstract function split():array;
 
     public final function __toString():string {
         return $this->toString(false);
@@ -120,6 +137,11 @@ abstract class Type extends PhpTypeChecker\Node {
         return count($this->split()) == 0;
     }
 
+    /**
+     * Removes any redundant types inside unions.
+     * @param TypeContext|null $ctx_
+     * @return Type
+     */
     public final function simplify(TypeContext $ctx_ = null):self {
         $ctx   = $ctx_ ?? new DummyTypeContext;
         $union = new Union($this);
@@ -133,9 +155,10 @@ abstract class Type extends PhpTypeChecker\Node {
         if ($this->containsType($other, $ctx)) {
             return $this;
         } else {
-            $types   = $this->subtractType($other, $ctx)->split();
-            $types[] = $other;
-            return self::union($this, $types);
+            return self::union($this, array_merge(
+                $this->subtractType($other, $ctx)->split(),
+                $this->split()
+            ));
         }
     }
 
@@ -150,6 +173,8 @@ abstract class Type extends PhpTypeChecker\Node {
     }
 
     /**
+     * Replace type vars with specific types. Used on the result of a method call to replace "$this" and "static" with
+     * the class the method was called on, so method chaining works properly.
      * @param self[]      $vars
      * @param TypeContext $ctx
      * @return Type
@@ -169,18 +194,23 @@ abstract class Type extends PhpTypeChecker\Node {
     /**
      * @param TypeContext   $ctx
      * @param ErrorReceiver $errors
-     * @return string[]
+     * @return string[] All the possible strings that would result from casting this to string. Strings can be "null"
+     *                  when it is unknown what the result of casting to a string will be (which will be the case for
+     *                  everything except SingleValue).
      */
     public function asString(TypeContext $ctx, ErrorReceiver $errors) {
+        // By defualt, a type is not allowed to be cast to a string
         $errors->add("Cannot cast {$this->toString()} to string", $this);
         return [null];
     }
 
     /**
      * @param ErrorReceiver $errors
-     * @return string[]
+     * @return string[] All the possible strings that would result from using this as an array key. Strings can be
+     *                  "null" if it is unknown what key would be used when this type is used as an array key.
      */
     public function asArrayKey(ErrorReceiver $errors) {
+        // By default, a type is not allowed to be used as an array key
         $errors->add("Cannot use {$this->toString()} as array key", $this);
         return [null];
     }
@@ -256,12 +286,12 @@ abstract class Type extends PhpTypeChecker\Node {
 }
 
 class Union extends Type {
-    /** @var Type[] */
+    /** @var SingleType[] */
     private $types = [];
 
     /**
-     * @param HasCodeLoc $loc
-     * @param Type[]     $types
+     * @param HasCodeLoc   $loc
+     * @param SingleType[] $types
      */
     public function __construct(HasCodeLoc $loc, array $types = []) {
         parent::__construct($loc);
@@ -278,21 +308,14 @@ class Union extends Type {
     }
 
     public function containsType(Type $type, TypeContext $ctx):bool {
-        return $this->any(function (Type $t) use ($type, $ctx) {
+        return $this->any(function (SingleType $t) use ($type, $ctx) {
             return $t->containsType($type, $ctx);
         });
     }
 
-    /** @return Type[] */
+    /** @return SingleType[] */
     public function split():array {
-        $types = [];
-        foreach ($this->types as $t) {
-            // Recurse just in case the Union contains a Union
-            foreach ($t->split() as $t2) {
-                $types[] = $t2;
-            }
-        }
-        return $types;
+        return $this->types;
     }
 
     public final function toString(bool $atomic = false):string {
@@ -331,13 +354,13 @@ class Union extends Type {
     }
 
     public function isCallableMethodOf(Type $type, TypeContext $ctx):bool {
-        return $this->all(function (Type $t) use ($type, $ctx) {
+        return $this->all(function (SingleType $t) use ($type, $ctx) {
             return $t->isCallableMethodOf($type, $ctx);
         });
     }
 
     public function hasCallableMethod(string $method, TypeContext $ctx):bool {
-        return $this->all(function (Type $t) use ($method, $ctx) {
+        return $this->all(function (SingleType $t) use ($method, $ctx) {
             return $t->hasCallableMethod($method, $ctx);
         });
     }
@@ -363,85 +386,85 @@ class Union extends Type {
     }
 
     public function isCallable(TypeContext $ctx):bool {
-        return $this->all(function (Type $t) use ($ctx) {
+        return $this->all(function (SingleType $t) use ($ctx) {
             return $t->isCallable($ctx);
         });
     }
 
     public function isSingleValue($value):bool {
-        return $this->all(function (Type $t) use ($value) {
+        return $this->all(function (SingleType $t) use ($value) {
             return $t->isSingleValue($value);
         });
     }
 
     public function isString():bool {
-        return $this->all(function (Type $t) {
+        return $this->all(function (SingleType $t) {
             return $t->isString();
         });
     }
 
     public function isFloat():bool {
-        return $this->all(function (Type $t) {
+        return $this->all(function (SingleType $t) {
             return $t->isFloat();
         });
     }
 
     public function isNull():bool {
-        return $this->all(function (Type $t) {
+        return $this->all(function (SingleType $t) {
             return $t->isNull();
         });
     }
 
     public function isFalsy():bool {
-        return $this->all(function (Type $t) {
+        return $this->all(function (SingleType $t) {
             return $t->isFalsy();
         });
     }
 
     public function isTruthy():bool {
-        return $this->all(function (Type $t) {
+        return $this->all(function (SingleType $t) {
             return $t->isTruthy();
         });
     }
 
     public function isBool():bool {
-        return $this->all(function (Type $t) {
+        return $this->all(function (SingleType $t) {
             return $t->isBool();
         });
     }
 
     public function isInt():bool {
-        return $this->all(function (Type $t) {
+        return $this->all(function (SingleType $t) {
             return $t->isInt();
         });
     }
 
     public function isResource():bool {
-        return $this->all(function (Type $t) {
+        return $this->all(function (SingleType $t) {
             return $t->isResource();
         });
     }
 
     public function isArrayOf(Type $type, TypeContext $ctx):bool {
-        return $this->all(function (Type $t) use ($type, $ctx) {
+        return $this->all(function (SingleType $t) use ($type, $ctx) {
             return $t->isArrayOf($type, $ctx);
         });
     }
 
     public function isShape(array $keys, TypeContext $ctx):bool {
-        return $this->all(function (Type $t) use ($keys, $ctx) {
+        return $this->all(function (SingleType $t) use ($keys, $ctx) {
             return $t->isShape($keys, $ctx);
         });
     }
 
     public function isObject():bool {
-        return $this->all(function (Type $t) {
+        return $this->all(function (SingleType $t) {
             return $t->isObject();
         });
     }
 
     public function isClass(string $class, TypeContext $ctx):bool {
-        return $this->all(function (Type $t) use ($class, $ctx) {
+        return $this->all(function (SingleType $t) use ($class, $ctx) {
             return $t->isClass($class, $ctx);
         });
     }
@@ -465,13 +488,22 @@ class Union extends Type {
     }
 
     public function isTypeVar(string $var):bool {
-        return $this->all(function (Type $t) use ($var) {
+        return $this->all(function (SingleType $t) use ($var) {
             return $t->isTypeVar($var);
         });
     }
 }
 
-class TypeVar extends Type {
+/**
+ * A type that is not a union.
+ */
+abstract class SingleType extends Type {
+    public final function split():array {
+        return [$this];
+    }
+}
+
+class TypeVar extends SingleType {
     const THIS   = '$this';
     const STATIC = 'static';
 
@@ -587,7 +619,7 @@ class TypeVar extends Type {
     }
 }
 
-class Mixed extends Type {
+class Mixed extends SingleType {
     public function toString(bool $atomic = false):string {
         return 'mixed';
     }
@@ -597,7 +629,7 @@ class Mixed extends Type {
     }
 }
 
-class SingleValue extends Type {
+class SingleValue extends SingleType {
     /** @var int|string|bool|float|null */
     private $value;
 
@@ -738,7 +770,7 @@ class SingleValue extends Type {
  * - array of form [$object, 'method']
  * - array of form ['class', 'method']
  */
-class Callable_ extends Type {
+class Callable_ extends SingleType {
     public function toTypeHint() {
         return 'callable';
     }
@@ -762,7 +794,7 @@ class Callable_ extends Type {
     }
 }
 
-class Float_ extends Type {
+class Float_ extends SingleType {
     public function toTypeHint() {
         return 'float';
     }
@@ -784,7 +816,7 @@ class Float_ extends Type {
     }
 }
 
-class String_ extends Type {
+class String_ extends SingleType {
     public function toTypeHint() {
         return 'string';
     }
@@ -810,7 +842,7 @@ class String_ extends Type {
     }
 }
 
-class Int_ extends Type {
+class Int_ extends SingleType {
     public function toTypeHint() {
         return 'int';
     }
@@ -836,7 +868,7 @@ class Int_ extends Type {
     }
 }
 
-class Object extends Type {
+class Object extends SingleType {
     public function toTypeHint() {
         return null;
     }
@@ -854,7 +886,7 @@ class Object extends Type {
     }
 }
 
-class Resource extends Type {
+class Resource extends SingleType {
     public function toString(bool $atomic = false):string {
         return 'resource';
     }
@@ -876,7 +908,10 @@ class Resource extends Type {
     }
 }
 
-class Class_ extends Type {
+/**
+ * An instance of a class or interface.
+ */
+class Class_ extends SingleType {
     /** @var string */
     private $class;
 
@@ -914,7 +949,7 @@ class Class_ extends Type {
     }
 }
 
-class Array_ extends Type {
+class Array_ extends SingleType {
     /** @var Type */
     private $inner;
 
@@ -943,7 +978,7 @@ class Array_ extends Type {
 /**
  * A "shape" is an array with a fixed set of (key, type) pairs.
  */
-class Shape extends Type {
+class Shape extends SingleType {
     /**
      * @var Type[] Mapping from keys to types
      */

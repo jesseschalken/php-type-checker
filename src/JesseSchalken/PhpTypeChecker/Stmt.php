@@ -176,6 +176,9 @@ class Block extends Stmt {
     }
 }
 
+/**
+ * A statement that isn't a block.
+ */
 abstract class SingleStmt extends Stmt {
     public final function split():array {
         return [$this];
