@@ -2,7 +2,7 @@
 
 namespace JesseSchalken\PhpTypeChecker;
 
-use JesseSchalken\PhpTypeChecker\Decls\GlobalDecls;
+use JesseSchalken\PhpTypeChecker\Context\Context;
 
 /**
  * @param \PhpParser\Node $node
@@ -51,20 +51,20 @@ function normalize_constant(string $name):string {
  * @return string
  */
 function type_check(array $phpFiles):string {
-    $errors = new class () extends ErrorReceiver {
+    $errors  = new class () extends ErrorReceiver {
         public $errors = [];
 
         public function add(string $message, HasCodeLoc $loc) {
             $this->errors[] = $loc->loc()->format($message);
         }
     };
-    $files  = File::parse($phpFiles, $errors);
-    $defns  = new GlobalDecls();
+    $files   = File::parse($phpFiles, $errors);
+    $context = new Context($errors, new CodeLoc('', 1, 1));
     foreach ($files as $file) {
-        $file->gatherGlobalDecls($defns);
+        $file->gatherGlobalDecls($context);
     }
     foreach ($files as $file) {
-        $file->typeCheck($defns, $errors);
+        $file->typeCheck($context);
     }
     return join("\n", $errors->errors);
 }

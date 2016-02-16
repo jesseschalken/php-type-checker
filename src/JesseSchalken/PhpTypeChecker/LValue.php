@@ -2,10 +2,9 @@
 
 namespace JesseSchalken\PhpTypeChecker\LValue;
 
-use JesseSchalken\PhpTypeChecker\ErrorReceiver;
 use JesseSchalken\PhpTypeChecker\HasCodeLoc;
 use JesseSchalken\PhpTypeChecker\Expr;
-use JesseSchalken\PhpTypeChecker\Decls;
+use JesseSchalken\PhpTypeChecker\Context;
 use JesseSchalken\PhpTypeChecker\Defns;
 use JesseSchalken\PhpTypeChecker\Constants;
 use JesseSchalken\PhpTypeChecker\Type;
@@ -33,7 +32,7 @@ class Variable extends LValue {
         return new \PhpParser\Node\Expr\Variable($this->name->unparseExprOrString());
     }
 
-    public function typeCheckExpr(Decls\LocalDecls $locals, Decls\GlobalDecls $globals, ErrorReceiver $errors):Type\Type {
+    public function checkExpr(Context\Context $context):Type\Type {
     }
 }
 
@@ -80,11 +79,11 @@ class SuperGlobalAccess extends LValue {
         return new \PhpParser\Node\Expr\Variable($this->global->value());
     }
 
-    public function typeCheckExpr(Decls\LocalDecls $locals, Decls\GlobalDecls $globals, ErrorReceiver $errors):Type\Type {
+    public function checkExpr(Context\Context $context):Type\Type {
         $global = $this->global->value();
-        $type   = $globals->getGlobal($global);
+        $type   = $context->getGlobal($global);
         if ($type === null) {
-            $errors->add("Undefined global '$global'", $this);
+            $context->addError("Undefined global '$global'", $this);
             return new Type\Mixed($this);
         } else {
             return $type;
@@ -124,7 +123,7 @@ class Property extends LValue {
         );
     }
 
-    public function typeCheckExpr(Decls\LocalDecls $locals, Decls\GlobalDecls $globals, ErrorReceiver $errors):Type\Type {
+    public function checkExpr(Context\Context $context):Type\Type {
         // TODO: Implement getType() method.
     }
 }
@@ -156,7 +155,7 @@ class StaticProperty extends LValue {
         );
     }
 
-    public function typeCheckExpr(Decls\LocalDecls $locals, Decls\GlobalDecls $globals, ErrorReceiver $errors):Type\Type {
+    public function checkExpr(Context\Context $context):Type\Type {
         // TODO: Implement getType() method.
     }
 }
@@ -193,7 +192,7 @@ class ArrayAccess extends LValue {
         );
     }
 
-    public function typeCheckExpr(Decls\LocalDecls $locals, Decls\GlobalDecls $globals, ErrorReceiver $errors):Type\Type {
+    public function checkExpr(Context\Context $context):Type\Type {
         // TODO: Implement getType() method.
     }
 }
@@ -230,7 +229,7 @@ class List_ extends Expr\Expr {
         return new \PhpParser\Node\Expr\List_($exprs);
     }
 
-    public function typeCheckExpr(Decls\LocalDecls $locals, Decls\GlobalDecls $globals, ErrorReceiver $errors):Type\Type {
+    public function checkExpr(Context\Context $context):Type\Type {
         $items = [];
         foreach ($this->exprs as $k => $v) {
             if ($v) {

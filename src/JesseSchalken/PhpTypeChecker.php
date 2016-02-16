@@ -188,22 +188,20 @@ class File extends Node {
     }
 
     /**
-     * @param Decls\GlobalDecls $decls
+     * @param Context\Context $decls
      * @return void
      */
-    public function gatherGlobalDecls(Decls\GlobalDecls $decls) {
+    public function gatherGlobalDecls(Context\Context $decls) {
         $this->contents->gatherGlobalDecls($decls);
     }
 
     /**
-     * @param Decls\GlobalDecls $globals
-     * @param ErrorReceiver     $errors
-     * @return void
+     * @param Context\Context $context
      */
-    public function typeCheck(Decls\GlobalDecls $globals, ErrorReceiver $errors) {
-        $locals = new Decls\LocalDecls();
-        $this->contents->gatherLocalDecls($locals);
-        $this->contents->typeCheckStmt($globals, $locals, $errors);
+    public function typeCheck(Context\Context $context) {
+        $context = $context->withoutLocals();
+        $this->contents->gatherLocalDecls($context);
+        $this->contents->checkStmt($context);
     }
 }
 

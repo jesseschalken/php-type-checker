@@ -2,8 +2,7 @@
 
 namespace JesseSchalken\PhpTypeChecker\Expr;
 
-use JesseSchalken\PhpTypeChecker\Decls;
-use JesseSchalken\PhpTypeChecker\ErrorReceiver;
+use JesseSchalken\PhpTypeChecker\Context;
 use JesseSchalken\PhpTypeChecker\Function_;
 use JesseSchalken\PhpTypeChecker\HasCodeLoc;
 use JesseSchalken\PhpTypeChecker\Node;
@@ -43,20 +42,15 @@ abstract class Expr extends Stmt\SingleStmt {
         return $this->unparseExpr();
     }
 
-    public function typeCheckStmt(Decls\GlobalDecls $globals, Decls\LocalDecls $locals, ErrorReceiver $errors) {
-        $this->typeCheckExpr($locals, $globals, $errors);
+    public function checkStmt(Context\Context $context) {
+        $this->checkExpr($context);
     }
 
     /**
-     * TODO these parameters will be passed around together pretty much everywhere and should probably be bundled
-     * together in one object. Maybe DummyTypeContext, LocalDecls and ErrorReceiver can be merged into GlobalDecls to
-     * make one big Context object? Yes that sounds like a good idea.
-     * @param Decls\LocalDecls  $locals
-     * @param Decls\GlobalDecls $globals
-     * @param ErrorReceiver     $errors
+     * @param Context\Context $context
      * @return Type\Type
      */
-    public abstract function typeCheckExpr(Decls\LocalDecls $locals, Decls\GlobalDecls $globals, ErrorReceiver $errors):Type\Type;
+    public abstract function checkExpr(Context\Context $context):Type\Type;
 }
 
 class Yield_ extends Expr {
@@ -89,7 +83,7 @@ class Yield_ extends Expr {
         );
     }
 
-    public function typeCheckExpr(Decls\LocalDecls $locals, Decls\GlobalDecls $globals, ErrorReceiver $errors):Type\Type {
+    public function checkExpr(Context\Context $context):Type\Type {
         return new Type\Mixed($this->loc());
     }
 }
@@ -125,7 +119,7 @@ class Include_ extends Expr {
         return new \PhpParser\Node\Expr\Include_($this->expr->unparseExpr(), $type);
     }
 
-    public function typeCheckExpr(Decls\LocalDecls $locals, Decls\GlobalDecls $globals, ErrorReceiver $errors):Type\Type {
+    public function checkExpr(Context\Context $context):Type\Type {
         return new Type\Mixed($this->loc());
     }
 }
@@ -161,25 +155,12 @@ class Array_ extends Expr {
         return new \PhpParser\Node\Expr\Array_($items);
     }
 
-    public function typeCheckExpr(Decls\LocalDecls $locals, Decls\GlobalDecls $globals, ErrorReceiver $errors):Type\Type {
-        $shape = true;
-        $types = [];
+    public function checkExpr(Context\Context $context):Type\Type {
+        $array = new Type\Shape($this, []);
         foreach ($this->items as $item) {
-            $key = $item->key()->typeCheckExpr($locals, $globals, $errors)->asArrayKey($errors);
-            $val = $item->val()->typeCheckExpr($locals, $globals, $errors);
-            foreach ($key as $k) {
-                if ($k === null) {
-                    $shape = false;
-                }
-                $types[$k] = $val->addType($types[$k] ?? Type\Type::none($this->loc()), $globals);
-            }
+            $array = $item->apply($context, $array);
         }
-
-        if ($shape) {
-            return new Type\Shape($this, $types);
-        } else {
-            return Type\Type::union($this, $types);
-        }
+        return $array;
     }
 }
 
@@ -212,15 +193,14 @@ class ArrayItem extends Node {
         return $stmts;
     }
 
-    /**
-     * @return Expr|null
-     */
-    public function key() {
-        return $this->key;
-    }
-
-    public function val():Expr {
-        return $this->value;
+    public function apply(Context\Context $context, Type\Type $array) {
+        $key = $this->key;
+        $val = $this->value->checkExpr($context);
+        if ($key) {
+            return $key->checkExpr($context)->useToSetArrayKey($context, $array, $val);
+        } else {
+            return $array->addArrayKey($context, $val);
+        }
     }
 
     public function unparse():\PhpParser\Node\Expr\ArrayItem {
@@ -288,7 +268,7 @@ class Closure extends Expr {
         ]));
     }
 
-    public function typeCheckExpr(Decls\LocalDecls $locals, Decls\GlobalDecls $globals, ErrorReceiver $errors):Type\Type {
+    public function checkExpr(Context\Context $context):Type\Type {
         return new Type\Class_($this, 'Closure');
     }
 }
@@ -341,16 +321,16 @@ class Ternary extends Expr {
         );
     }
 
-    public function typeCheckExpr(Decls\LocalDecls $locals, Decls\GlobalDecls $globals, ErrorReceiver $errors):Type\Type {
+    public function checkExpr(Context\Context $context):Type\Type {
         // TODO Apply type gaurds in $this->cond
 
         if ($this->true) {
-            $true = $this->true->typeCheckExpr($locals, $globals, $errors);
+            $true = $this->true->checkExpr($context);
         } else {
-            $true = $this->cond->typeCheckExpr($locals, $globals, $errors)->removeFalsy($globals);
+            $true = $this->cond->checkExpr($context)->removeFalsy($context);
         }
 
-        $false = $this->false->typeCheckExpr($locals, $globals, $errors);
+        $false = $this->false->checkExpr($context);
 
         return Type\Type::union($this, [$true, $false,]);
     }
@@ -393,7 +373,7 @@ class ConcatMany extends Expr {
         return new \PhpParser\Node\Scalar\Encapsed(self::unparseEncaps($this->exprs));
     }
 
-    public function typeCheckExpr(Decls\LocalDecls $locals, Decls\GlobalDecls $globals, ErrorReceiver $errors):Type\Type {
+    public function checkExpr(Context\Context $context):Type\Type {
         // TODO Make this really smart and return a SingleValue (or union thereof) if it can
         return new Type\String_($this);
     }
@@ -424,7 +404,7 @@ class Isset_ extends Expr {
         return new \PhpParser\Node\Expr\Isset_($exprs);
     }
 
-    public function typeCheckExpr(Decls\LocalDecls $locals, Decls\GlobalDecls $globals, ErrorReceiver $errors):Type\Type {
+    public function checkExpr(Context\Context $context):Type\Type {
         return new Type\Int_($this->loc());
     }
 }
@@ -603,7 +583,7 @@ class BinOp extends Expr {
         }
     }
 
-    public function typeCheckExpr(Decls\LocalDecls $locals, Decls\GlobalDecls $globals, ErrorReceiver $errors):Type\Type {
+    public function checkExpr(Context\Context $context):Type\Type {
         switch ($this->type) {
             case self:: INSTANCEOF:
                 return Type\Type::bool($this);
@@ -641,8 +621,8 @@ class BinOp extends Expr {
                 ]);
 
             case self::COALESCE:
-                $left  = $this->left->typeCheckExpr($locals, $globals, $errors)->removeNull($globals);
-                $right = $this->right->typeCheckExpr($locals, $globals, $errors);
+                $left  = $this->left->checkExpr($context)->removeNull($context);
+                $right = $this->right->checkExpr($context);
                 return Type\Type::union($this, [$left, $right]);
 
             case self::BOOl_AND:
@@ -658,7 +638,7 @@ class BinOp extends Expr {
 
             case self::ASSIGN:
             case self::ASSIGN_REF:
-                return $this->right->typeCheckExpr($locals, $globals, $errors);
+                return $this->right->checkExpr($context);
 
             case self::ASSIGN_ADD:
             case self::ASSIGN_SUBTRACT:
@@ -730,7 +710,7 @@ class Cast extends Expr {
         }
     }
 
-    public function typeCheckExpr(Decls\LocalDecls $locals, Decls\GlobalDecls $globals, ErrorReceiver $errors):Type\Type {
+    public function checkExpr(Context\Context $context):Type\Type {
         switch ($this->type) {
             case self::INT:
                 return new Type\Int_($this);
@@ -816,7 +796,7 @@ class UnOp extends Expr {
         }
     }
 
-    public function typeCheckExpr(Decls\LocalDecls $locals, Decls\GlobalDecls $globals, ErrorReceiver $errors):Type\Type {
+    public function checkExpr(Context\Context $context):Type\Type {
         switch ($this->type) {
             case self::PRE_INC:
             case self::PRE_DEC:
@@ -824,7 +804,7 @@ class UnOp extends Expr {
 
             case self::POST_INC:
             case self::POST_DEC:
-                return $this->expr->typeCheckExpr($locals, $globals, $errors);
+                return $this->expr->checkExpr($context);
 
             case self::PRINT:
                 // "print ..." always evaluates to int(1)
@@ -841,7 +821,7 @@ class UnOp extends Expr {
                 return Type\Type::number($this);
 
             case self::SUPPRESS:
-                return $this->expr->typeCheckExpr($locals, $globals, $errors);
+                return $this->expr->checkExpr($context);
 
             case self::EMPTY:
                 return Type\Type::bool($this);
@@ -850,7 +830,7 @@ class UnOp extends Expr {
                 return new Type\Mixed($this);
 
             case self::CLONE:
-                return $this->expr->typeCheckExpr($locals, $globals, $errors);
+                return $this->expr->checkExpr($context);
 
             default:
                 throw new \Exception('Invalid unary operator type: ' . $this->type);
@@ -876,7 +856,7 @@ class Exit_ extends Expr {
         return new \PhpParser\Node\Expr\Exit_($expr);
     }
 
-    public function typeCheckExpr(Decls\LocalDecls $locals, Decls\GlobalDecls $globals, ErrorReceiver $errors):Type\Type {
+    public function checkExpr(Context\Context $context):Type\Type {
         // "exit" is an expression??? How do you use the result?
         return new Type\Mixed($this);
     }
@@ -903,7 +883,7 @@ class ShellExec extends Expr {
         return new \PhpParser\Node\Expr\ShellExec(ConcatMany::unparseEncaps($this->parts));
     }
 
-    public function typeCheckExpr(Decls\LocalDecls $locals, Decls\GlobalDecls $globals, ErrorReceiver $errors):Type\Type {
+    public function checkExpr(Context\Context $context):Type\Type {
         return new Type\String_($this);
     }
 }
@@ -956,7 +936,7 @@ class ClassName extends AbstractClassName {
         return $this->class;
     }
 
-    public function typeCheckExpr(Decls\LocalDecls $locals, Decls\GlobalDecls $globals, ErrorReceiver $errors):Type\Type {
+    public function checkExpr(Context\Context $context):Type\Type {
         return new Type\SingleValue($this, $this->class);
     }
 }
@@ -994,7 +974,7 @@ class StaticClassName extends AbstractClassName {
         return new \PhpParser\Node\Name('static');
     }
 
-    public function typeCheckExpr(Decls\LocalDecls $locals, Decls\GlobalDecls $globals, ErrorReceiver $errors):Type\Type {
+    public function checkExpr(Context\Context $context):Type\Type {
         return new Type\String_($this);
     }
 }

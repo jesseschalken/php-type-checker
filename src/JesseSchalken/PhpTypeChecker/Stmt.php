@@ -3,9 +3,8 @@
 namespace JesseSchalken\PhpTypeChecker\Stmt;
 
 use JesseSchalken\PhpTypeChecker\HasCodeLoc;
-use JesseSchalken\PhpTypeChecker\Decls;
+use JesseSchalken\PhpTypeChecker\Context;
 use JesseSchalken\PhpTypeChecker\Defns;
-use JesseSchalken\PhpTypeChecker\ErrorReceiver;
 use JesseSchalken\PhpTypeChecker\Expr;
 use JesseSchalken\PhpTypeChecker\Node;
 use JesseSchalken\PhpTypeChecker\Parser;
@@ -57,27 +56,21 @@ abstract class Stmt extends Node {
         return $decls;
     }
 
-    public function gatherGlobalDecls(Decls\GlobalDecls $decls) {
+    public function gatherGlobalDecls(Context\Context $decls) {
         foreach ($this->subStmts() as $stmt) {
             $stmt->gatherGlobalDecls($decls);
         }
     }
 
-    public function gatherLocalDecls(Decls\LocalDecls $decls) {
+    public function gatherLocalDecls(Context\Context $context) {
         foreach ($this->localSubStmts() as $stmt) {
-            $stmt->gatherLocalDecls($decls);
+            $stmt->gatherLocalDecls($context);
         }
     }
 
-    /**
-     * @param Decls\GlobalDecls $globals
-     * @param Decls\LocalDecls  $locals
-     * @param ErrorReceiver     $errors
-     * @return void
-     */
-    public function typeCheckStmt(Decls\GlobalDecls $globals, Decls\LocalDecls $locals, ErrorReceiver $errors) {
+    public function checkStmt(Context\Context $context) {
         foreach ($this->subStmts() as $stmt) {
-            $stmt->typeCheckStmt($globals, $locals, $errors);
+            $stmt->checkStmt($context);
         }
     }
 }
@@ -432,10 +425,10 @@ class Goto_ extends SingleStmt {
         return new \PhpParser\Node\Stmt\Goto_($this->name);
     }
 
-    public function typeCheckStmt(Decls\GlobalDecls $globals, Decls\LocalDecls $locals, ErrorReceiver $errors) {
-        if (!$locals->hasLabel($this->name)) {
-            $errors->add("Undefined label '$this->name'", $this);
+    public function checkStmt(Context\Context $context) {
+        if (!$context->hasLabel($this->name)) {
+            $context->addError("Undefined label '$this->name'", $this);
         }
-        parent::typeCheckStmt($globals, $locals, $errors);
+        parent::checkStmt($context);
     }
 }

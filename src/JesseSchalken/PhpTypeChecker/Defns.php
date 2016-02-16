@@ -3,7 +3,7 @@
 namespace JesseSchalken\PhpTypeChecker\Defns;
 
 use JesseSchalken\PhpTypeChecker\HasCodeLoc;
-use JesseSchalken\PhpTypeChecker\Decls;
+use JesseSchalken\PhpTypeChecker\Context;
 use JesseSchalken\PhpTypeChecker\Expr;
 use JesseSchalken\PhpTypeChecker\Function_;
 use JesseSchalken\PhpTypeChecker\Node;
@@ -64,16 +64,16 @@ abstract class VariableType extends Definition {
 }
 
 class GlobalVariableType extends VariableType {
-    public function gatherGlobalDecls(Decls\GlobalDecls $decls) {
+    public function gatherGlobalDecls(Context\Context $decls) {
         parent::gatherGlobalDecls($decls);
         $decls->addGlobal($this->name(), $this->type());
     }
 }
 
 class LocalVariableType extends VariableType {
-    public function gatherLocalDecls(Decls\LocalDecls $decls) {
-        parent::gatherLocalDecls($decls);
-        $decls->addLocal($this->name(), $this->type());
+    public function gatherLocalDecls(Context\Context $context) {
+        parent::gatherLocalDecls($context);
+        $context->addLocal($this->name(), $this->type());
     }
 }
 
@@ -94,9 +94,9 @@ class Label_ extends LocalDefinition {
         return new \PhpParser\Node\Stmt\Label($this->name);
     }
 
-    public function gatherLocalDecls(Decls\LocalDecls $decls) {
-        parent::gatherLocalDecls($decls);
-        $decls->addLabel($this->name);
+    public function gatherLocalDecls(Context\Context $context) {
+        parent::gatherLocalDecls($context);
+        $context->addLabel($this->name);
     }
 }
 
@@ -140,7 +140,7 @@ class Const_ extends GlobalDefinition implements HasNamespace {
         return extract_namespace($this->name());
     }
 
-    public function gatherGlobalDecls(Decls\GlobalDecls $decls) {
+    public function gatherGlobalDecls(Context\Context $decls) {
         parent::gatherGlobalDecls($decls);
         $decls->addConstant($this->name, $this->value);
     }
@@ -187,7 +187,7 @@ class FunctionDefinition extends GlobalDefinition implements HasNamespace {
         return extract_namespace($this->name());
     }
 
-    public function gatherGlobalDecls(Decls\GlobalDecls $decls) {
+    public function gatherGlobalDecls(Context\Context $decls) {
         parent::gatherGlobalDecls($decls);
         $decls->addFunction($this->name, $this->type);
     }

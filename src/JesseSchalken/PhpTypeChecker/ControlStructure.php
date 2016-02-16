@@ -3,7 +3,7 @@
 namespace JesseSchalken\PhpTypeChecker\ControlStructure;
 
 use JesseSchalken\PhpTypeChecker\HasCodeLoc;
-use JesseSchalken\PhpTypeChecker\Decls;
+use JesseSchalken\PhpTypeChecker\Context;
 use JesseSchalken\PhpTypeChecker\Defns;
 use JesseSchalken\PhpTypeChecker\Expr;
 use JesseSchalken\PhpTypeChecker\Node;

@@ -2,12 +2,11 @@
 
 namespace JesseSchalken\PhpTypeChecker\Function_;
 
-use JesseSchalken\PhpTypeChecker\ErrorReceiver;
 use JesseSchalken\PhpTypeChecker\HasCodeLoc;
 use JesseSchalken\PhpTypeChecker\Expr;
 use JesseSchalken\PhpTypeChecker\Node;
 use JesseSchalken\PhpTypeChecker\Call;
-use JesseSchalken\PhpTypeChecker\Decls;
+use JesseSchalken\PhpTypeChecker\Context;
 use JesseSchalken\PhpTypeChecker\Type;
 
 class Function_ extends Node {
@@ -168,53 +167,44 @@ class Function_ extends Node {
     }
 
     /**
-     * @param HasCodeLoc        $loc
-     * @param Decls\GlobalDecls $globals
-     * @param Decls\LocalDecls  $locals
-     * @param ErrorReceiver     $errors
-     * @param Call\CallArg[]    $args
-     * @param bool              $asRef
+     * @param HasCodeLoc      $loc
+     * @param Context\Context $context
+     * @param Call\CallArg[]  $args
+     * @param bool            $asRef
      * @return Type\Type
      */
-    public function call(
-        HasCodeLoc $loc,
-        Decls\GlobalDecls $globals,
-        Decls\LocalDecls $locals,
-        ErrorReceiver $errors,
-        array $args,
-        bool $asRef
-    ):Type\Type {
+    public function call(HasCodeLoc $loc, Context\Context $context, array $args, bool $asRef):Type\Type {
         for ($i = 0; $this->acceptsParam($i) && !$this->isParamOptional($i); $i++) {
             $i_ = '#' . ($i + 1);
             if (!isset($args[$i])) {
-                $errors->add("Missing parameter $i_", $loc);
+                $context->addError("Missing parameter $i_", $loc);
             }
         }
         foreach ($args as $i => $arg) {
             $i_ = '#' . ($i + 1);
             // TODO deal with unpacked parameters somehow
             if (!$this->acceptsParam($i)) {
-                $errors->add("Excess parameter $i_", $arg);
+                $context->addError("Excess parameter $i_", $arg);
                 continue;
             }
             $expr      = $arg->expr();
             $paramType = $this->paramType($i);
-            $exprType  = $expr->typeCheckExpr($locals, $globals, $errors);
+            $exprType  = $expr->checkExpr($context);
             if ($this->isParamRef($i)) {
                 if (!$expr->isReferrable()) {
-                    $errors->add("Parameter $i_ must be a reference (lvalue or call)", $arg);
+                    $context->addError("Parameter $i_ must be a reference (lvalue or call)", $arg);
                 }
-                if (!$paramType->isEquivelant($exprType, $globals)) {
-                    $errors->add("Types $exprType and $paramType must be equivelant (pass by ref)", $arg);
+                if (!$paramType->isEquivelant($exprType, $context)) {
+                    $context->addError("Types $exprType and $paramType must be equivelant (pass by ref)", $arg);
                 }
             } else {
-                if (!$paramType->containsType($exprType, $globals)) {
-                    $errors->add("$exprType is incompatible with $paramType", $arg);
+                if (!$paramType->containsType($exprType, $context)) {
+                    $context->addError("$exprType is incompatible with $paramType", $arg);
                 }
             }
         }
         if ($asRef && !$this->returnRef) {
-            $errors->add("By-ref call to function that does not return a reference", $loc);
+            $context->addError("By-ref call to function that does not return a reference", $loc);
         }
         return $this->returnType;
     }

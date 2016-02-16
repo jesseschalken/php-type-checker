@@ -1,6 +1,6 @@
 <?php
 
-namespace JesseSchalken\PhpTypeChecker\Decls;
+namespace JesseSchalken\PhpTypeChecker\Context;
 
 use JesseSchalken\PhpTypeChecker\ErrorReceiver;
 use JesseSchalken\PhpTypeChecker\Function_;
@@ -11,7 +11,9 @@ use JesseSchalken\PhpTypeChecker\Call;
 use function JesseSchalken\PhpTypeChecker\normalize_constant;
 use function JesseSchalken\PhpTypeChecker\str_ieq;
 
-class GlobalDecls implements Type\TypeContext {
+class Context implements Type\TypeContext {
+    /** @var ErrorReceiver */
+    private $errors;
     /** @var Type\Type[] */
     private $globals = [];
     /** @var Function_\Function_ */
@@ -20,6 +22,19 @@ class GlobalDecls implements Type\TypeContext {
     private $constants = [];
     /** @var ClassDecl[] */
     private $classes = [];
+    /** @var bool[] */
+    private $labels = [];
+    /** @var Type\Type[] */
+    private $locals;
+    /** @var string */
+    private $class = '';
+    /** @var HasCodeLoc */
+    private $loc;
+
+    public function __construct(ErrorReceiver $errors, HasCodeLoc $loc) {
+        $this->errors = $errors;
+        $this->loc    = $loc;
+    }
 
     public function addGlobal(string $name, Type\Type $type) {
         $this->globals[$name] = $type;
@@ -97,28 +112,38 @@ class GlobalDecls implements Type\TypeContext {
     /**
      * @param HasCodeLoc     $loc
      * @param string         $name
-     * @param LocalDecls     $locals
-     * @param ErrorReceiver  $errors
      * @param Call\CallArg[] $args
      * @param bool           $asRef
      * @return Type\Type
      */
-    public function callFunction(HasCodeLoc $loc, string $name, LocalDecls $locals, ErrorReceiver $errors, array $args, bool $asRef) {
+    public function callFunction(HasCodeLoc $loc, string $name, array $args, bool $asRef) {
         $function = $this->getFunction($name);
         if ($function) {
-            return $function->call($loc, $this, $locals, $errors, $args, $asRef);
+            return $function->call($loc, $this, $args, $asRef);
         } else {
-            $errors->add("Undefined function '$name'", $loc);
+            $this->addError("Undefined function '$name'", $loc);
             return new Type\Mixed($loc);
         }
     }
-}
 
-class LocalDecls {
-    /** @var bool[] */
-    private $labels = [];
-    /** @var Type\Type[] */
-    private $locals;
+    public function withoutLocals():self {
+        $clone         = clone $this;
+        $clone->labels = [];
+        $clone->locals = [];
+        return $clone;
+    }
+
+    public function withLoc(HasCodeLoc $loc):self {
+        $clone      = clone $this;
+        $clone->loc = $loc;
+        return $clone;
+    }
+
+    public function withClass(string $class):self {
+        $clone        = clone $this;
+        $clone->class = $class;
+        return $clone;
+    }
 
     public function addLocal(string $name, Type\Type $type) {
         $this->locals[$name] = $type;
@@ -134,6 +159,10 @@ class LocalDecls {
 
     public function getLocal(string $name) {
         return $this->locals[$name] ?? null;
+    }
+
+    public function addError(string $message, HasCodeLoc $loc = null) {
+        $this->errors->add($message, $loc ?: $this->loc);
     }
 }
 
@@ -173,12 +202,12 @@ abstract class ClassMembers {
     public abstract function fromClass(ClassDecl $class):ClassMembers;
 
     /**
-     * @param string      $self
-     * @param string      $name
-     * @param GlobalDecls $dfns
+     * @param string  $self
+     * @param string  $name
+     * @param Context $dfns
      * @return null|string
      */
-    public final function findDefiningClass(string $self, string $name, GlobalDecls $dfns) {
+    public final function findDefiningClass(string $self, string $name, Context $dfns) {
         if ($this->exists($name)) {
             return $self;
         }

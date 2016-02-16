@@ -7,7 +7,7 @@ use JesseSchalken\PhpTypeChecker\ErrorReceiver;
 use JesseSchalken\PhpTypeChecker\Expr;
 use JesseSchalken\PhpTypeChecker\Function_;
 use JesseSchalken\PhpTypeChecker\Call;
-use JesseSchalken\PhpTypeChecker\Decls;
+use JesseSchalken\PhpTypeChecker\Context;
 use JesseSchalken\PhpTypeChecker\HasCodeLoc;
 use function JesseSchalken\PhpTypeChecker\str_ieq;
 
@@ -293,24 +293,30 @@ abstract class Type extends PhpTypeChecker\Node {
         return false;
     }
 
+    public function addArrayKey(Context\Context $context, Type $type):Type {
+        $context->addError("Cannot use $this as array");
+        return $this;
+    }
+
+    public function setArrayKey(Context\Context $context, string $key, Type $type):Type {
+        $context->addError("Cannot use $this as array");
+        return $this;
+    }
+
+    public function useToSetArrayKey(Context\Context $context, Type $array, Type $value):Type {
+        $context->addError("Cannot use $this as array key");
+        return $array;
+    }
+
     /**
-     * @param HasCodeLoc        $loc
-     * @param Decls\GlobalDecls $globals
-     * @param Decls\LocalDecls  $locals
-     * @param ErrorReceiver     $errors
-     * @param Call\CallArg[]    $args
-     * @param bool              $asRef
+     * @param HasCodeLoc      $loc
+     * @param Context\Context $context
+     * @param Call\CallArg[]  $args
+     * @param bool            $asRef
      * @return Type
      */
-    public function call(
-        HasCodeLoc $loc,
-        Decls\GlobalDecls $globals,
-        Decls\LocalDecls $locals,
-        ErrorReceiver $errors,
-        array $args,
-        bool $asRef
-    ):self {
-        $errors->add("Cannot call $this as a function", $this);
+    public function call(HasCodeLoc $loc, Context\Context $context, array $args, bool $asRef):self {
+        $context->addError("Cannot call $this as a function", $this);
     }
 }
 
@@ -374,12 +380,28 @@ class Union extends Type {
         }
     }
 
+    public function useToSetArrayKey(Context\Context $context, Type $array, Type $value):Type {
+        return $this->map(function (Type $t) use ($context, $array, $value) {
+            return $t->useToSetArrayKey($context, $array, $value);
+        });
+    }
+
+    public function addArrayKey(Context\Context $context, Type $type):Type {
+        return $this->map(function (Type $t) use ($context, $type) {
+            return $t->addArrayKey($context, $type);
+        });
+    }
+
+    public function setArrayKey(Context\Context $context, string $key, Type $type):Type {
+        return $this->map(function (Type $t) use ($context, $key, $type) {
+            return $t->setArrayKey($context, $key, $type);
+        });
+    }
+
     public function fillTypeVars(array $vars, TypeContext $ctx):Type {
-        $clone = clone $this;
-        foreach ($clone->types as &$v) {
-            $v = $v->fillTypeVars($vars, $ctx);
-        }
-        return $clone;
+        return $this->map(function (Type $t) use ($vars, $ctx) {
+            return $t->fillTypeVars($vars, $ctx);
+        });
     }
 
     public function isCallableMethodOf(Type $type, TypeContext $ctx):bool {
@@ -516,6 +538,18 @@ class Union extends Type {
         return false;
     }
 
+    public function map(callable $f):Type {
+        $types = [];
+        foreach ($this->types as $t) {
+            /** @var Type $type2 */
+            $type2 = $f($t);
+            foreach ($type2->split() as $type) {
+                $types[] = $type;
+            }
+        }
+        return $types;
+    }
+
     public function isTypeVar(string $var):bool {
         return $this->all(function (SingleType $t) use ($var) {
             return $t->isTypeVar($var);
@@ -577,6 +611,14 @@ class TypeVar extends SingleType {
 
     public function isTypeVar(string $var):bool {
         return $this->var === $var;
+    }
+
+    public function addArrayKey(Context\Context $context, Type $type):Type {
+        return $this->type->addArrayKey($context, $type);
+    }
+
+    public function setArrayKey(Context\Context $context, string $key, Type $type):Type {
+        return $this->type->setArrayKey($context, $key, $type);
     }
 
     public function asArrayKey(ErrorReceiver $errors):array {
@@ -782,6 +824,14 @@ class SingleValue extends SingleType {
         }
     }
 
+    public function useToSetArrayKey(Context\Context $context, Type $array, Type $value):Type {
+        $val = $this->value;
+        if (is_bool($val) || is_float($val)) {
+            $val = (int)$val;
+        }
+        return $array->setArrayKey($context, (string)$val, $value);
+    }
+
     public function isFalsy():bool {
         return !$this->value;
     }
@@ -790,11 +840,11 @@ class SingleValue extends SingleType {
         return !!$this->value;
     }
 
-    public function call(HasCodeLoc $loc, Decls\GlobalDecls $globals, Decls\LocalDecls $locals, ErrorReceiver $errors, array $args, bool $asRef):Type {
+    public function call(HasCodeLoc $loc, Context\Context $context, array $args, bool $asRef):Type {
         $parts = explode('::', (string)$this->value, 2);
         switch (count($parts)) {
             case 1:
-                return $globals->callFunction($loc, $parts[0], $locals, $errors, $args, $asRef);
+                return $context->callFunction($loc, $parts[0], $args, $asRef);
             case 2:
                 // TODO
                 // return $globals->callMethod($parts[0], $parts[1], $locals, $errors, $args);
@@ -836,19 +886,19 @@ class Callable_ extends SingleType {
     }
 
     /**
-     * @param HasCodeLoc        $loc
-     * @param Decls\GlobalDecls $globals
-     * @param Decls\LocalDecls  $locals
-     * @param ErrorReceiver     $errors
-     * @param Call\CallArg[]    $args
-     * @param bool              $asRef
+     * @param HasCodeLoc      $loc
+     * @param Context\Context $context
+     * @param Call\CallArg[]  $args
+     * @param bool            $asRef
      * @return Type
+     * @internal param Context\LocalDecls $locals
+     * @internal param ErrorReceiver $errors
      */
-    public function call(HasCodeLoc $loc, Decls\GlobalDecls $globals, Decls\LocalDecls $locals, ErrorReceiver $errors, array $args, bool $asRef):Type {
+    public function call(HasCodeLoc $loc, Context\Context $context, array $args, bool $asRef):Type {
         // We don't know what the function signature is going to be, so just eval the args and return mixed
         foreach ($args as $arg) {
             // TODO We should at least check that unpacked parameters are array|Traversable
-            $arg->expr()->typeCheckExpr($locals, $globals, $errors);
+            $arg->expr()->checkExpr($context);
         }
         return new Mixed($this);
     }
@@ -1033,6 +1083,14 @@ class Array_ extends SingleType {
     public function containsType(Type $type, TypeContext $ctx):bool {
         return $type->isArrayOf($this->inner, $ctx);
     }
+
+    public function addArrayKey(Context\Context $context, Type $type):Type {
+        return new self($this, $this->inner->addType($type, $context));
+    }
+
+    public function setArrayKey(Context\Context $context, string $key, Type $type):Type {
+        return $this->addArrayKey($context, $type);
+    }
 }
 
 /**
@@ -1048,7 +1106,7 @@ class Shape extends SingleType {
      * @param HasCodeLoc $loc
      * @param Type[]     $keys
      */
-    public function __construct(HasCodeLoc $loc, array $keys = []) {
+    public function __construct(HasCodeLoc $loc, array $keys) {
         parent::__construct($loc);
         $this->keys = $keys;
     }
@@ -1088,6 +1146,16 @@ class Shape extends SingleType {
 
     public function isArrayOf(Type $type, TypeContext $ctx):bool {
         return $type->containsType($this->all(), $ctx);
+    }
+
+    public function addArrayKey(Context\Context $context, Type $type):Type {
+        return (new Array_($this, $this->all()))->addArrayKey($context, $type);
+    }
+
+    public function setArrayKey(Context\Context $context, string $key, Type $type):Type {
+        $keys       = $this->keys;
+        $keys[$key] = $type;
+        return new self($this, $keys);
     }
 
     /**

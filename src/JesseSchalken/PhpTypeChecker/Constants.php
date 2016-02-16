@@ -2,10 +2,9 @@
 
 namespace JesseSchalken\PhpTypeChecker\Constants;
 
-use JesseSchalken\PhpTypeChecker\ErrorReceiver;
 use JesseSchalken\PhpTypeChecker\HasCodeLoc;
 use JesseSchalken\PhpTypeChecker\Expr;
-use JesseSchalken\PhpTypeChecker\Decls;
+use JesseSchalken\PhpTypeChecker\Context;
 use JesseSchalken\PhpTypeChecker\Type;
 
 class GetConstant extends Expr\Expr {
@@ -25,7 +24,14 @@ class GetConstant extends Expr\Expr {
         return new \PhpParser\Node\Expr\ConstFetch(new \PhpParser\Node\Name\FullyQualified($this->name));
     }
 
-    public function typeCheckExpr(Decls\LocalDecls $locals, Decls\GlobalDecls $globals, ErrorReceiver $errors):Type\Type {
+    public function checkExpr(Context\Context $context):Type\Type {
+        $expr = $context->getConstant($this->name);
+        if (!$expr) {
+            $context->addError("Undefined constant '$this->name'", $this);
+            return new Type\Mixed($this);
+        } else {
+            return $expr->checkExpr($context);
+        }
     }
 }
 
@@ -52,14 +58,8 @@ class GetClassConstant extends Expr\Expr {
         );
     }
 
-    public function typeCheckExpr(Decls\LocalDecls $locals, Decls\GlobalDecls $globals, ErrorReceiver $errors):Type\Type {
-        $expr = $globals->getConstant($this->const);
-        if (!$expr) {
-            $errors->add("Undefined constant '$this->const'", $this);
-            return new Type\Mixed($this);
-        } else {
-            return $expr->typeCheckExpr($locals, $globals, $errors);
-        }
+    public function checkExpr(Context\Context $context):Type\Type {
+        // TODO
     }
 }
 
@@ -131,7 +131,7 @@ class GetMagicConst extends Expr\Expr {
         }
     }
 
-    public function typeCheckExpr(Decls\LocalDecls $locals, Decls\GlobalDecls $globals, ErrorReceiver $errors):Type\Type {
+    public function checkExpr(Context\Context $context):Type\Type {
         return new Type\SingleValue($this, $this->value);
     }
 }
@@ -205,7 +205,7 @@ class Literal extends Expr\Expr {
         return $this->value;
     }
 
-    public function typeCheckExpr(Decls\LocalDecls $locals, Decls\GlobalDecls $globals, ErrorReceiver $errors):Type\Type {
+    public function checkExpr(Context\Context $context):Type\Type {
         return new Type\SingleValue($this, $this->value);
     }
 }

@@ -2,13 +2,12 @@
 
 namespace JesseSchalken\PhpTypeChecker\Call;
 
-use JesseSchalken\PhpTypeChecker\ErrorReceiver;
 use JesseSchalken\PhpTypeChecker\HasCodeLoc;
 use JesseSchalken\PhpTypeChecker\Defns\Class_;
 use JesseSchalken\PhpTypeChecker\Expr\Expr;
 use JesseSchalken\PhpTypeChecker\Node;
 use JesseSchalken\PhpTypeChecker\Type;
-use JesseSchalken\PhpTypeChecker\Decls;
+use JesseSchalken\PhpTypeChecker\Context;
 use JesseSchalken\PhpTypeChecker\Defns;
 
 abstract class Call extends Expr {
@@ -16,8 +15,8 @@ abstract class Call extends Expr {
     private $args = [];
 
     /**
-     * @param HasCodeLoc   $loc
-     * @param CallArg[] $args
+     * @param HasCodeLoc $loc
+     * @param CallArg[]  $args
      */
     public function __construct(HasCodeLoc $loc, array $args) {
         parent::__construct($loc);
@@ -51,9 +50,9 @@ class FunctionCall extends Call {
     private $function;
 
     /**
-     * @param HasCodeLoc   $loc
-     * @param Expr      $function
-     * @param CallArg[] $args
+     * @param HasCodeLoc $loc
+     * @param Expr       $function
+     * @param CallArg[]  $args
      */
     public function __construct(HasCodeLoc $loc, Expr $function, array $args) {
         parent::__construct($loc, $args);
@@ -71,14 +70,9 @@ class FunctionCall extends Call {
         );
     }
 
-    public function typeCheckExpr(Decls\LocalDecls $locals, Decls\GlobalDecls $globals, ErrorReceiver $errors):Type\Type {
-        return $this->function->typeCheckExpr($locals, $globals, $errors)->call(
-            $this,
-            $globals,
-            $locals,
-            $errors,
-            $this->args(),
-            false // TODO
+    public function checkExpr(Context\Context $context):Type\Type {
+        return $this->function->checkExpr($context)->call(
+            $this, $context, $this->args(), false // TODO
         );
     }
 }
@@ -90,10 +84,10 @@ class StaticMethodCall extends Call {
     private $method;
 
     /**
-     * @param HasCodeLoc   $loc
-     * @param CallArg[] $args
-     * @param Expr      $class
-     * @param Expr      $method
+     * @param HasCodeLoc $loc
+     * @param CallArg[]  $args
+     * @param Expr       $class
+     * @param Expr       $method
      */
     public function __construct(HasCodeLoc $loc, array $args, Expr $class, Expr $method) {
         parent::__construct($loc, $args);
@@ -113,7 +107,7 @@ class StaticMethodCall extends Call {
         );
     }
 
-    public function typeCheckExpr(Decls\LocalDecls $locals, Decls\GlobalDecls $globals, ErrorReceiver $errors):Type\Type {
+    public function checkExpr(Context\Context $context):Type\Type {
         // TODO: Implement getType() method.
     }
 }
@@ -125,10 +119,10 @@ class MethodCall extends Call {
     private $method;
 
     /**
-     * @param HasCodeLoc   $loc
-     * @param CallArg[] $args
-     * @param Expr      $object
-     * @param Expr      $method
+     * @param HasCodeLoc $loc
+     * @param CallArg[]  $args
+     * @param Expr       $object
+     * @param Expr       $method
      */
     public function __construct(HasCodeLoc $loc, array $args, Expr $object, Expr $method) {
         parent::__construct($loc, $args);
@@ -148,7 +142,7 @@ class MethodCall extends Call {
         );
     }
 
-    public function typeCheckExpr(Decls\LocalDecls $locals, Decls\GlobalDecls $globals, ErrorReceiver $errors):Type\Type {
+    public function checkExpr(Context\Context $context):Type\Type {
         // TODO: Implement getType() method.
     }
 }
@@ -183,9 +177,9 @@ class New_ extends Call {
     private $class;
 
     /**
-     * @param HasCodeLoc   $loc
-     * @param Expr      $class
-     * @param CallArg[] $args
+     * @param HasCodeLoc $loc
+     * @param Expr       $class
+     * @param CallArg[]  $args
      */
     public function __construct(HasCodeLoc $loc, Expr $class, array $args) {
         parent::__construct($loc, $args);
@@ -205,7 +199,7 @@ class New_ extends Call {
         );
     }
 
-    public function typeCheckExpr(Decls\LocalDecls $locals, Decls\GlobalDecls $globals, ErrorReceiver $errors):Type\Type {
+    public function checkExpr(Context\Context $context):Type\Type {
         // TODO: Implement getType() method.
     }
 }
@@ -232,7 +226,7 @@ class AnonymousNew extends Call {
         );
     }
 
-    public function typeCheckExpr(Decls\LocalDecls $locals, Decls\GlobalDecls $globals, ErrorReceiver $errors):Type\Type {
+    public function checkExpr(Context\Context $context):Type\Type {
         // TODO: Implement getType() method.
     }
 }
