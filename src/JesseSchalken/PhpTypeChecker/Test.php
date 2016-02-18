@@ -10,7 +10,7 @@ class Test extends \PHPUnit_Framework_TestCase {
         parent::setUp();
     }
 
-    function test1() {
+    public function test1() {
         self::assertEquals(type_check(['file1.php' => <<<'s'
 <?php
 
@@ -22,5 +22,22 @@ s
 file1.php(4,5): 8 is incompatible with string
 s
         );
+    }
+
+    public function test2() {
+        self::assertEquals(type_check(['file1.php' => <<<'s'
+<?php
+
+/**
+ * @param int $f
+ */
+function foo($f) {}
+foo('hello');
+s
+            ,
+        ]), <<<'s'
+'file1.php(7,5): 'hello' is incompatible with int'
+s
+);
     }
 }

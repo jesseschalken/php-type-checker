@@ -42,7 +42,7 @@ abstract class Expr extends Stmt\SingleStmt {
         return $this->unparseExpr();
     }
 
-    public function checkStmt(Context\Context $context) {
+    public final function checkStmt(Context\Context $context) {
         $this->checkExpr($context);
     }
 
