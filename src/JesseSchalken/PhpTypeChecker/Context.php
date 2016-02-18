@@ -2,6 +2,7 @@
 
 namespace JesseSchalken\PhpTypeChecker\Context;
 
+use JesseSchalken\PhpTypeChecker\CodeLoc;
 use JesseSchalken\PhpTypeChecker\ErrorReceiver;
 use JesseSchalken\PhpTypeChecker\Function_;
 use JesseSchalken\PhpTypeChecker\HasCodeLoc;
@@ -28,9 +29,16 @@ class Context implements Type\TypeContext {
     private $locals;
     /** @var string */
     private $class = '';
+    /** @var Type\Type */
+    private $return;
 
     public function __construct(ErrorReceiver $errors) {
         $this->errors = $errors;
+        $this->return = new Type\Mixed(new CodeLoc('', 1, 1));
+    }
+
+    public function setReturn(Type\Type $type) {
+        $this->return = $type;
     }
 
     public function addGlobal(string $name, Type\Type $type) {
@@ -118,8 +126,7 @@ class Context implements Type\TypeContext {
         if ($function) {
             return $function->call($loc, $this, $args, $asRef);
         } else {
-            $this->addError("Undefined function '$name'", $loc);
-            return new Type\Mixed($loc);
+            return $this->addError("Undefined function '$name'", $loc);
         }
     }
 
@@ -152,8 +159,9 @@ class Context implements Type\TypeContext {
         return $this->locals[$name] ?? null;
     }
 
-    public function addError(string $message, HasCodeLoc $loc) {
+    public function addError(string $message, HasCodeLoc $loc):Type\Type {
         $this->errors->add($message, $loc);
+        return Type\Type::none($loc);
     }
 }
 

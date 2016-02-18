@@ -33,6 +33,7 @@ class Variable extends LValue {
     }
 
     public function checkExpr(Context\Context $context):Type\Type {
+        return $this->name->checkExpr($context)->useAsVariableName($this, $context);
     }
 }
 
@@ -83,8 +84,7 @@ class SuperGlobalAccess extends LValue {
         $global = $this->global->value();
         $type   = $context->getGlobal($global);
         if ($type === null) {
-            $context->addError("Undefined global '$global'", $this);
-            return new Type\Mixed($this);
+            return $context->addError("Undefined global '$global'", $this);
         } else {
             return $type;
         }

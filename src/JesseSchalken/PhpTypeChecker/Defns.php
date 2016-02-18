@@ -191,6 +191,12 @@ class FunctionDefinition extends GlobalDefinition implements HasNamespace {
         parent::gatherGlobalDecls($decls);
         $decls->addFunction($this->name, $this->type);
     }
+
+    public function checkStmt(Context\Context $context) {
+        $context = $context->withoutLocals();
+        $this->type->addLocals($context);
+        $this->body->checkStmt($context);
+    }
 }
 
 abstract class Classish extends GlobalDefinition implements HasNamespace {

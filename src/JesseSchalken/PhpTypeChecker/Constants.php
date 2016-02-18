@@ -27,8 +27,7 @@ class GetConstant extends Expr\Expr {
     public function checkExpr(Context\Context $context):Type\Type {
         $expr = $context->getConstant($this->name);
         if (!$expr) {
-            $context->addError("Undefined constant '$this->name'", $this);
-            return new Type\Mixed($this);
+            return $context->addError("Undefined constant '$this->name'", $this);
         } else {
             return $expr->checkExpr($context);
         }

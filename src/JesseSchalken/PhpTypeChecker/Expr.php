@@ -858,7 +858,7 @@ class Exit_ extends Expr {
 
     public function checkExpr(Context\Context $context):Type\Type {
         // "exit" is an expression??? How do you use the result?
-        return new Type\Mixed($this);
+        return Type\Type::none($this);
     }
 }
 

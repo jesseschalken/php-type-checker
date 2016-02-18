@@ -104,6 +104,12 @@ abstract class Type extends PhpTypeChecker\Node {
         return new SingleValue($loc, null);
     }
 
+    /**
+     * Typically used for the result of something undefined (method/function/variable/property). Since an error is
+     * logged for the undefined thing, the type no longer needs to be tracked and so should be none.
+     * @param HasCodeLoc $loc
+     * @return Type
+     */
     public final static function none(HasCodeLoc $loc):self {
         return new Union($loc);
     }
@@ -322,12 +328,15 @@ abstract class Type extends PhpTypeChecker\Node {
      * @return Type
      */
     public function call(HasCodeLoc $loc, Context\Context $context, array $args, bool $asRef):self {
-        $context->addError("Cannot call $this as a function", $this);
-        return new Mixed($loc);
+        return $context->addError("Cannot call $this as a function", $this);
     }
 
     public function isMixed():bool {
         return false;
+    }
+
+    public function useAsVariableName(HasCodeLoc $loc, Context\Context $context):Type {
+        return $context->addError("$this cannot be used as the name of a variable", $loc);
     }
 }
 
@@ -389,6 +398,12 @@ class Union extends Type {
                 $join = join('|', array_keys($parts));
                 return $atomic ? "($join)" : $join;
         }
+    }
+
+    public function useAsVariableName(HasCodeLoc $loc, Context\Context $context):Type {
+        return $this->map(function (Type $t) use ($loc, $context) {
+            return $t->useAsVariableName($loc, $context);
+        });
     }
 
     public function useToSetArrayKey(HasCodeLoc $loc, Context\Context $context, Type $array, Type $value):Type {
@@ -616,6 +631,10 @@ class TypeVar extends SingleType {
 
     public function toString(bool $atomic = false):string {
         return $this->var;
+    }
+
+    public function useAsVariableName(HasCodeLoc $loc, Context\Context $context):Type {
+        return $this->type->useAsVariableName($loc, $context);
     }
 
     public function useToSetArrayKey(HasCodeLoc $loc, Context\Context $context, Type $array, Type $value):Type {
@@ -882,7 +901,17 @@ class SingleValue extends SingleType {
                 // TODO
                 // return $globals->callMethod($parts[0], $parts[1], $locals, $errors, $args);
             default:
-                return new Mixed($this);
+                return $context->addError("Undefined function/method: $this->value", $loc);
+        }
+    }
+
+    public function useAsVariableName(HasCodeLoc $loc, Context\Context $context):Type {
+        $name = (string)$this->value;
+        $var  = $context->getLocal($name);
+        if ($var) {
+            return $var;
+        } else {
+            return $context->addError("Undefined variable: $name", $loc);
         }
     }
 }
