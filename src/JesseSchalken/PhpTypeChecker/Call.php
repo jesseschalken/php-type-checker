@@ -159,6 +159,18 @@ class CallArg extends Node {
         $this->splat = $splat;
     }
 
+    public function checkExpr(Context\Context $context):Type\Type {
+        $type = $this->expr->checkExpr($context);
+        // Make sure the thing that is splatted is at least an array|Traversable
+        if ($this->splat) {
+            (new Type\Union($this, [
+                new Type\Class_($this, 'Traversable'),
+                new Type\Array_($this, new Type\Mixed($this)),
+            ]))->checkContains($this, $type, $context);
+        }
+        return $type;
+    }
+
     public function expr():Expr {
         return $this->expr;
     }

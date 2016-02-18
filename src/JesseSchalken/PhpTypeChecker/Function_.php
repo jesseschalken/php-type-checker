@@ -198,9 +198,7 @@ class Function_ extends Node {
                     $context->addError("Types $exprType and $paramType must be equivelant (pass by ref)", $arg);
                 }
             } else {
-                if (!$paramType->containsType($exprType, $context)) {
-                    $context->addError("$exprType is incompatible with $paramType", $arg);
-                }
+                $paramType->checkContains($arg, $exprType, $context);
             }
         }
         if ($asRef && !$this->returnRef) {

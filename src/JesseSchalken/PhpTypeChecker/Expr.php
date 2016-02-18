@@ -197,9 +197,9 @@ class ArrayItem extends Node {
         $key = $this->key;
         $val = $this->value->checkExpr($context);
         if ($key) {
-            return $key->checkExpr($context)->useToSetArrayKey($context, $array, $val);
+            return $key->checkExpr($context)->useToSetArrayKey($this, $context, $array, $val);
         } else {
-            return $array->addArrayKey($context, $val);
+            return $array->addArrayKey($this, $context, $val);
         }
     }
 

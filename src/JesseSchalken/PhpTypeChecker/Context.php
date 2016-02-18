@@ -28,12 +28,9 @@ class Context implements Type\TypeContext {
     private $locals;
     /** @var string */
     private $class = '';
-    /** @var HasCodeLoc */
-    private $loc;
 
-    public function __construct(ErrorReceiver $errors, HasCodeLoc $loc) {
+    public function __construct(ErrorReceiver $errors) {
         $this->errors = $errors;
-        $this->loc    = $loc;
     }
 
     public function addGlobal(string $name, Type\Type $type) {
@@ -133,12 +130,6 @@ class Context implements Type\TypeContext {
         return $clone;
     }
 
-    public function withLoc(HasCodeLoc $loc):self {
-        $clone      = clone $this;
-        $clone->loc = $loc;
-        return $clone;
-    }
-
     public function withClass(string $class):self {
         $clone        = clone $this;
         $clone->class = $class;
@@ -161,8 +152,8 @@ class Context implements Type\TypeContext {
         return $this->locals[$name] ?? null;
     }
 
-    public function addError(string $message, HasCodeLoc $loc = null) {
-        $this->errors->add($message, $loc ?: $this->loc);
+    public function addError(string $message, HasCodeLoc $loc) {
+        $this->errors->add($message, $loc);
     }
 }
 

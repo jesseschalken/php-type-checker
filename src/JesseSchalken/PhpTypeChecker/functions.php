@@ -59,7 +59,7 @@ function type_check(array $phpFiles):string {
         }
     };
     $files   = File::parse($phpFiles, $errors);
-    $context = new Context($errors, new CodeLoc('', 1, 1));
+    $context = new Context($errors);
     foreach ($files as $file) {
         $file->gatherGlobalDecls($context);
     }

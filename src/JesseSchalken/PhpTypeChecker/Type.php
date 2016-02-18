@@ -181,6 +181,12 @@ abstract class Type extends PhpTypeChecker\Node {
         return self::union($this, $types);
     }
 
+    public final function checkContains(HasCodeLoc $loc, self $that, Context\Context $context) {
+        if (!$this->containsType($that, $context)) {
+            $context->addError("$that is incompatible with $this", $loc);
+        }
+    }
+
     /**
      * Replace type vars with specific types. Used on the result of a method call to replace "$this" and "static" with
      * the class the method was called on, so method chaining works properly.
@@ -293,18 +299,18 @@ abstract class Type extends PhpTypeChecker\Node {
         return false;
     }
 
-    public function addArrayKey(Context\Context $context, Type $type):Type {
-        $context->addError("Cannot use $this as array");
+    public function addArrayKey(HasCodeLoc $loc, Context\Context $context, Type $type):Type {
+        $context->addError("Cannot use $this as array", $loc);
         return $this;
     }
 
-    public function setArrayKey(Context\Context $context, string $key, Type $type):Type {
-        $context->addError("Cannot use $this as array");
+    public function setArrayKey(HasCodeLoc $loc, Context\Context $context, string $key, Type $type):Type {
+        $context->addError("Cannot use $this as array", $loc);
         return $this;
     }
 
-    public function useToSetArrayKey(Context\Context $context, Type $array, Type $value):Type {
-        $context->addError("Cannot use $this as array key");
+    public function useToSetArrayKey(HasCodeLoc $loc, Context\Context $context, Type $array, Type $value):Type {
+        $context->addError("Cannot use $this as array key", $loc);
         return $array;
     }
 
@@ -317,6 +323,11 @@ abstract class Type extends PhpTypeChecker\Node {
      */
     public function call(HasCodeLoc $loc, Context\Context $context, array $args, bool $asRef):self {
         $context->addError("Cannot call $this as a function", $this);
+        return new Mixed($loc);
+    }
+
+    public function isMixed():bool {
+        return false;
     }
 }
 
@@ -380,21 +391,21 @@ class Union extends Type {
         }
     }
 
-    public function useToSetArrayKey(Context\Context $context, Type $array, Type $value):Type {
-        return $this->map(function (Type $t) use ($context, $array, $value) {
-            return $t->useToSetArrayKey($context, $array, $value);
+    public function useToSetArrayKey(HasCodeLoc $loc, Context\Context $context, Type $array, Type $value):Type {
+        return $this->map(function (Type $t) use ($loc, $context, $array, $value) {
+            return $t->useToSetArrayKey($loc, $context, $array, $value);
         });
     }
 
-    public function addArrayKey(Context\Context $context, Type $type):Type {
-        return $this->map(function (Type $t) use ($context, $type) {
-            return $t->addArrayKey($context, $type);
+    public function addArrayKey(HasCodeLoc $loc, Context\Context $context, Type $type):Type {
+        return $this->map(function (Type $t) use ($loc, $context, $type) {
+            return $t->addArrayKey($loc, $context, $type);
         });
     }
 
-    public function setArrayKey(Context\Context $context, string $key, Type $type):Type {
-        return $this->map(function (Type $t) use ($context, $key, $type) {
-            return $t->setArrayKey($context, $key, $type);
+    public function setArrayKey(HasCodeLoc $loc, Context\Context $context, string $key, Type $type):Type {
+        return $this->map(function (Type $t) use ($loc, $context, $key, $type) {
+            return $t->setArrayKey($loc, $context, $key, $type);
         });
     }
 
@@ -434,6 +445,12 @@ class Union extends Type {
             }
         }
         return $keys;
+    }
+
+    public function isMixed():bool {
+        return $this->all(function (Type $t) {
+            return $t->isMixed();
+        });
     }
 
     public function isCallable(TypeContext $ctx):bool {
@@ -566,6 +583,10 @@ abstract class SingleType extends Type {
     }
 }
 
+/**
+ * Used for generics. Even though PHP/PhpDoc don't support generics, the '$this' and 'static' types are effectively a
+ * kind of type parameter and should be modelled as such.
+ */
 class TypeVar extends SingleType {
     const THIS   = '$this';
     const STATIC = 'static';
@@ -597,6 +618,18 @@ class TypeVar extends SingleType {
         return $this->var;
     }
 
+    public function useToSetArrayKey(HasCodeLoc $loc, Context\Context $context, Type $array, Type $value):Type {
+        return $this->type->useToSetArrayKey($loc, $context, $array, $value);
+    }
+
+    public function call(HasCodeLoc $loc, Context\Context $context, array $args, bool $asRef):Type {
+        return $this->type->call($loc, $context, $args, $asRef);
+    }
+
+    public function isMixed():bool {
+        return $this->type->isMixed();
+    }
+
     public function isFalsy():bool {
         return $this->type->isFalsy();
     }
@@ -613,12 +646,12 @@ class TypeVar extends SingleType {
         return $this->var === $var;
     }
 
-    public function addArrayKey(Context\Context $context, Type $type):Type {
-        return $this->type->addArrayKey($context, $type);
+    public function addArrayKey(HasCodeLoc $loc, Context\Context $context, Type $type):Type {
+        return $this->type->addArrayKey($loc, $context, $type);
     }
 
-    public function setArrayKey(Context\Context $context, string $key, Type $type):Type {
-        return $this->type->setArrayKey($context, $key, $type);
+    public function setArrayKey(HasCodeLoc $loc, Context\Context $context, string $key, Type $type):Type {
+        return $this->type->setArrayKey($loc, $context, $key, $type);
     }
 
     public function asArrayKey(ErrorReceiver $errors):array {
@@ -824,12 +857,12 @@ class SingleValue extends SingleType {
         }
     }
 
-    public function useToSetArrayKey(Context\Context $context, Type $array, Type $value):Type {
+    public function useToSetArrayKey(HasCodeLoc $loc, Context\Context $context, Type $array, Type $value):Type {
         $val = $this->value;
         if (is_bool($val) || is_float($val)) {
             $val = (int)$val;
         }
-        return $array->setArrayKey($context, (string)$val, $value);
+        return $array->setArrayKey($loc, $context, (string)$val, $value);
     }
 
     public function isFalsy():bool {
@@ -891,13 +924,10 @@ class Callable_ extends SingleType {
      * @param Call\CallArg[]  $args
      * @param bool            $asRef
      * @return Type
-     * @internal param Context\LocalDecls $locals
-     * @internal param ErrorReceiver $errors
      */
     public function call(HasCodeLoc $loc, Context\Context $context, array $args, bool $asRef):Type {
         // We don't know what the function signature is going to be, so just eval the args and return mixed
         foreach ($args as $arg) {
-            // TODO We should at least check that unpacked parameters are array|Traversable
             $arg->expr()->checkExpr($context);
         }
         return new Mixed($this);
@@ -1073,7 +1103,11 @@ class Array_ extends SingleType {
     }
 
     public function toString(bool $atomic = false):string {
-        return $this->inner->toString(true) . '[]';
+        if ($this->inner->isMixed()) {
+            return 'array';
+        } else {
+            return $this->inner->toString(true) . '[]';
+        }
     }
 
     public function isArrayOf(Type $type, TypeContext $ctx):bool {
@@ -1084,12 +1118,12 @@ class Array_ extends SingleType {
         return $type->isArrayOf($this->inner, $ctx);
     }
 
-    public function addArrayKey(Context\Context $context, Type $type):Type {
+    public function addArrayKey(HasCodeLoc $loc, Context\Context $context, Type $type):Type {
         return new self($this, $this->inner->addType($type, $context));
     }
 
-    public function setArrayKey(Context\Context $context, string $key, Type $type):Type {
-        return $this->addArrayKey($context, $type);
+    public function setArrayKey(HasCodeLoc $loc, Context\Context $context, string $key, Type $type):Type {
+        return $this->addArrayKey($loc, $context, $type);
     }
 }
 
@@ -1148,11 +1182,11 @@ class Shape extends SingleType {
         return $type->containsType($this->all(), $ctx);
     }
 
-    public function addArrayKey(Context\Context $context, Type $type):Type {
-        return (new Array_($this, $this->all()))->addArrayKey($context, $type);
+    public function addArrayKey(HasCodeLoc $loc, Context\Context $context, Type $type):Type {
+        return (new Array_($this, $this->all()))->addArrayKey($loc, $context, $type);
     }
 
-    public function setArrayKey(Context\Context $context, string $key, Type $type):Type {
+    public function setArrayKey(HasCodeLoc $loc, Context\Context $context, string $key, Type $type):Type {
         $keys       = $this->keys;
         $keys[$key] = $type;
         return new self($this, $keys);
