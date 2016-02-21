@@ -2,7 +2,7 @@
 
 namespace JesseSchalken\PhpTypeChecker;
 
-use JesseSchalken\PhpTypeChecker\Context\Context;
+use JesseSchalken\PhpTypeChecker\Context;
 
 /**
  * @param \PhpParser\Node $node
@@ -59,7 +59,7 @@ function type_check(array $phpFiles):string {
         }
     };
     $files   = File::parse($phpFiles, $errors);
-    $context = new Context($errors);
+    $context = new Context\Context($errors);
     foreach ($files as $file) {
         $file->gatherGlobalDecls($context);
     }
@@ -79,4 +79,18 @@ function remove_namespace(string $name):string {
     return $pos === false ? $name : substr($name, $pos + 1);
 }
 
+/**
+ * @param Type\Type[]     $types1
+ * @param Type\Type[]     $types2
+ * @param Context\Context $context
+ * @return array|Type\Type[]
+ */
+function merge_types(array $types1, array $types2, Context\Context $context):array {
+    foreach ($types2 as $key => $type) {
+        $types1[$key] = isset($types1[$key])
+            ? $types1[$key]->addType($type, $context)
+            : $type;
+    }
+    return $types1;
+}
 

@@ -28,7 +28,20 @@ abstract class Call extends Expr {
         return $this->args;
     }
 
-    public function subStmts():array {
+    /**
+     * @param Context\Context $context
+     * @param bool            $noErrors
+     * @return EvaledCallArg[]
+     */
+    public function evalArgs(Context\Context $context, bool $noErrors):array {
+        $args = [];
+        foreach ($this->args as $arg) {
+            $args[] = $arg->checkExpr($context, $noErrors);
+        }
+        return $args;
+    }
+
+    public function subStmts(bool $deep):array {
         $stmts = [];
         foreach ($this->args as $arg) {
             $stmts[] = $arg->expr();
@@ -59,8 +72,10 @@ class FunctionCall extends Call {
         $this->function = $function;
     }
 
-    public function subStmts():array {
-        return array_merge(parent::subStmts(), [$this->function]);
+    public function subStmts(bool $deep):array {
+        $stmts   = parent::subStmts($deep);
+        $stmts[] = $this->function;
+        return $stmts;
     }
 
     public function unparseExpr():\PhpParser\Node\Expr {
@@ -70,9 +85,12 @@ class FunctionCall extends Call {
         );
     }
 
-    public function checkExpr(Context\Context $context):Type\Type {
-        return $this->function->checkExpr($context)->call(
-            $this, $context, $this->args(), false // TODO
+    public function checkExpr(Context\Context $context, bool $noErrors):Type\Type {
+        return $this->function->checkExpr($context, $noErrors)->call(
+            $this,
+            $context,
+            $this->evalArgs($context, $noErrors),
+            $noErrors
         );
     }
 }
@@ -95,8 +113,11 @@ class StaticMethodCall extends Call {
         $this->method = $method;
     }
 
-    public function subStmts():array {
-        return array_merge(parent::subStmts(), [$this->class, $this->method]);
+    public function subStmts(bool $deep):array {
+        $stmts   = parent::subStmts($deep);
+        $stmts[] = $this->class;
+        $stmts[] = $this->method;
+        return $stmts;
     }
 
     public function unparseExpr():\PhpParser\Node\Expr {
@@ -107,7 +128,7 @@ class StaticMethodCall extends Call {
         );
     }
 
-    public function checkExpr(Context\Context $context):Type\Type {
+    public function checkExpr(Context\Context $context, bool $noErrors):Type\Type {
         // TODO: Implement getType() method.
     }
 }
@@ -130,8 +151,11 @@ class MethodCall extends Call {
         $this->method = $method;
     }
 
-    public function subStmts():array {
-        return array_merge(parent::subStmts(), [$this->object, $this->method]);
+    public function subStmts(bool $deep):array {
+        $stmts   = parent::subStmts($deep);
+        $stmts[] = $this->object;
+        $stmts[] = $this->method;
+        return $stmts;
     }
 
     public function unparseExpr():\PhpParser\Node\Expr {
@@ -142,7 +166,7 @@ class MethodCall extends Call {
         );
     }
 
-    public function checkExpr(Context\Context $context):Type\Type {
+    public function checkExpr(Context\Context $context, bool $noErrors):Type\Type {
         // TODO: Implement getType() method.
     }
 }
@@ -159,16 +183,19 @@ class CallArg extends Node {
         $this->splat = $splat;
     }
 
-    public function checkExpr(Context\Context $context):Type\Type {
-        $type = $this->expr->checkExpr($context);
-        // Make sure the thing that is splatted is at least an array|Traversable
+    public function checkExpr(Context\Context $context, bool $noErrors):EvaledCallArg {
+        $evaled = new EvaledCallArg($this);
+
+        $evaled->type       = $this->expr->checkExpr($context, $noErrors);
+        $evaled->referrable = $this->expr->isReferrable();
+        $evaled->splat      = $this->splat;
+
+        // Unpack the value if splatted
         if ($this->splat) {
-            (new Type\Union($this, [
-                new Type\Class_($this, 'Traversable'),
-                new Type\Array_($this, new Type\Mixed($this)),
-            ]))->checkContains($this, $type, $context);
+            $evaled->type = $evaled->type->doForeach($this, $context)->val;
         }
-        return $type;
+
+        return $evaled;
     }
 
     public function expr():Expr {
@@ -182,6 +209,15 @@ class CallArg extends Node {
             $this->splat
         );
     }
+}
+
+class EvaledCallArg extends Node {
+    /** @var Type\Type The unpacked type, if $splat = true */
+    public $type;
+    /** @var bool */
+    public $referrable;
+    /** @var bool */
+    public $splat;
 }
 
 class New_ extends Call {
@@ -198,8 +234,8 @@ class New_ extends Call {
         $this->class = $class;
     }
 
-    public function subStmts():array {
-        $stmts   = parent::subStmts();
+    public function subStmts(bool $deep):array {
+        $stmts   = parent::subStmts($deep);
         $stmts[] = $this->class;
         return $stmts;
     }
@@ -211,7 +247,7 @@ class New_ extends Call {
         );
     }
 
-    public function checkExpr(Context\Context $context):Type\Type {
+    public function checkExpr(Context\Context $context, bool $noErrors):Type\Type {
         // TODO: Implement getType() method.
     }
 }
@@ -220,13 +256,18 @@ class AnonymousNew extends Call {
     /** @var Class_ */
     private $class;
 
+    /**
+     * @param HasCodeLoc $loc
+     * @param Class_     $class
+     * @param CallArg[]  $args
+     */
     public function __construct(HasCodeLoc $loc, Class_ $class, array $args) {
         parent::__construct($loc, $args);
         $this->class = $class;
     }
 
-    public function subStmts():array {
-        $stmts   = parent::subStmts();
+    public function subStmts(bool $deep):array {
+        $stmts   = parent::subStmts($deep);
         $stmts[] = $this->class;
         return $stmts;
     }
@@ -238,7 +279,7 @@ class AnonymousNew extends Call {
         );
     }
 
-    public function checkExpr(Context\Context $context):Type\Type {
+    public function checkExpr(Context\Context $context, bool $noErrors):Type\Type {
         // TODO: Implement getType() method.
     }
 }

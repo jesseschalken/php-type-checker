@@ -9,7 +9,9 @@ use JesseSchalken\PhpTypeChecker\Function_;
 use JesseSchalken\PhpTypeChecker\Call;
 use JesseSchalken\PhpTypeChecker\Context;
 use JesseSchalken\PhpTypeChecker\HasCodeLoc;
+use JesseSchalken\PhpTypeChecker\NullErrorReceiver;
 use function JesseSchalken\PhpTypeChecker\str_ieq;
+use function JesseSchalken\PhpTypeChecker\merge_types;
 
 \phpDocumentor\Reflection\DocBlock\Tag::registerTagHandler(
     'global',
@@ -19,35 +21,6 @@ use function JesseSchalken\PhpTypeChecker\str_ieq;
     'xglobal',
     \phpDocumentor\Reflection\DocBlock\Tag\VarTag::class
 );
-
-interface TypeContext {
-    public function isCompatible(string $parent, string $child):bool;
-
-    public function functionExists(string $name):bool;
-
-    /**
-     * @param string $class
-     * @param string $method
-     * @param bool   $static If true, non-static methods are excluded, because they (generally) shouldn't be called
-     *                       statically.
-     * @return bool
-     */
-    public function methodExists(string $class, string $method, bool $static):bool;
-}
-
-class DummyTypeContext implements TypeContext {
-    public function isCompatible(string $parent, string $child):bool {
-        return str_ieq($parent, $child);
-    }
-
-    public function functionExists(string $name):bool {
-        return false;
-    }
-
-    public function methodExists(string $class, string $method, bool $static):bool {
-        return false;
-    }
-}
 
 abstract class Type extends PhpTypeChecker\Node {
     /**
@@ -114,16 +87,16 @@ abstract class Type extends PhpTypeChecker\Node {
         return new Union($loc);
     }
 
-    public final function removeFalsy(TypeContext $ctx):self {
+    public final function removeFalsy(Context\Context $ctx):self {
         return $this->subtractType(self::falsy($this), $ctx);
     }
 
-    public final function removeNull(TypeContext $ctx):self {
+    public final function removeNull(Context\Context $ctx):self {
         return $this->subtractType(new SingleValue($this, null), $ctx);
     }
 
     /**
-     * @return null|string|\PhpParser\Node\Name
+     * @return null|\PhpParser\Node\Name|string
      */
     public function toTypeHint() {
         return null;
@@ -131,7 +104,7 @@ abstract class Type extends PhpTypeChecker\Node {
 
     public abstract function toString(bool $atomic = false):string;
 
-    public abstract function containsType(Type $type, TypeContext $ctx):bool;
+    public abstract function containsType(Type $type, Context\Context $ctx):bool;
 
     /**
      * @return SingleType[]
@@ -146,7 +119,7 @@ abstract class Type extends PhpTypeChecker\Node {
         return count($this->split()) == 0;
     }
 
-    public final function isEquivelant(self $type, TypeContext $ctx):bool {
+    public final function isEquivelant(self $type, Context\Context $ctx):bool {
         return
             $type->containsType($this, $ctx) &&
             $this->containsType($type, $ctx);
@@ -154,11 +127,11 @@ abstract class Type extends PhpTypeChecker\Node {
 
     /**
      * Removes any redundant types inside unions.
-     * @param TypeContext|null $ctx_
+     * @param Context\Context|null $ctx_
      * @return Type
      */
-    public final function simplify(TypeContext $ctx_ = null):self {
-        $ctx   = $ctx_ ?? new DummyTypeContext;
+    public final function simplify(Context\Context $ctx_ = null):self {
+        $ctx   = $ctx_ ?? new Context\Context(new NullErrorReceiver());
         $union = new Union($this);
         foreach ($this->split() as $type) {
             $union = $union->addType($type, $ctx);
@@ -166,7 +139,7 @@ abstract class Type extends PhpTypeChecker\Node {
         return $union;
     }
 
-    public final function addType(self $other, TypeContext $ctx):self {
+    public final function addType(self $other, Context\Context $ctx):self {
         if ($this->containsType($other, $ctx)) {
             return $this;
         } else {
@@ -177,7 +150,7 @@ abstract class Type extends PhpTypeChecker\Node {
         }
     }
 
-    public final function subtractType(self $other, TypeContext $ctx):self {
+    public final function subtractType(self $other, Context\Context $ctx):self {
         $types = [];
         foreach ($this->split() as $t) {
             if (!$other->containsType($t, $ctx)) {
@@ -193,33 +166,39 @@ abstract class Type extends PhpTypeChecker\Node {
         }
     }
 
+    public final function checkEquivelant(HasCodeLoc $loc, self $that, Context\Context $context) {
+        if (!$this->isEquivelant($that, $context)) {
+            $context->addError("$that is not requivelant to $this", $loc);
+        }
+    }
+
     /**
      * Replace type vars with specific types. Used on the result of a method call to replace "$this" and "static" with
      * the class the method was called on, so method chaining works properly.
-     * @param self[]      $vars
-     * @param TypeContext $ctx
+     * @param self[]          $vars
+     * @param Context\Context $ctx
      * @return Type
      */
-    public function fillTypeVars(array $vars, TypeContext $ctx):self {
+    public function fillTypeVars(array $vars, Context\Context $ctx):self {
         return $this;
     }
 
-    public function isCallableMethodOf(Type $type, TypeContext $ctx):bool {
+    public function isCallableMethodOf(Type $type, Context\Context $ctx):bool {
         return false;
     }
 
-    public function hasCallableMethod(string $method, TypeContext $ctx):bool {
+    public function hasCallableMethod(string $method, Context\Context $ctx):bool {
         return false;
     }
 
     /**
-     * @param TypeContext   $ctx
-     * @param ErrorReceiver $errors
+     * @param Context\Context $ctx
+     * @param ErrorReceiver   $errors
      * @return string[] All the possible strings that would result from casting this to string. Strings can be "null"
      *                  when it is unknown what the result of casting to a string will be (which will be the case for
      *                  everything except SingleValue).
      */
-    public function asString(TypeContext $ctx, ErrorReceiver $errors) {
+    public function asString(Context\Context $ctx, ErrorReceiver $errors) {
         // By defualt, a type is not allowed to be cast to a string
         $errors->add("Cannot cast {$this->toString()} to string", $this);
         return [null];
@@ -236,7 +215,7 @@ abstract class Type extends PhpTypeChecker\Node {
         return [null];
     }
 
-    public function isCallable(TypeContext $ctx):bool {
+    public function isCallable(Context\Context $ctx):bool {
         return false;
     }
 
@@ -280,16 +259,16 @@ abstract class Type extends PhpTypeChecker\Node {
         return false;
     }
 
-    public function isArrayOf(Type $type, TypeContext $ctx):bool {
+    public function isArrayOf(Type $type, Context\Context $ctx):bool {
         return false;
     }
 
     /**
-     * @param Type[]      $keys
-     * @param TypeContext $ctx
+     * @param Type[]          $keys
+     * @param Context\Context $ctx
      * @return bool
      */
-    public function isShape(array $keys, TypeContext $ctx):bool {
+    public function isShape(array $keys, Context\Context $ctx):bool {
         return false;
     }
 
@@ -297,7 +276,7 @@ abstract class Type extends PhpTypeChecker\Node {
         return false;
     }
 
-    public function isClass(string $class, TypeContext $ctx):bool {
+    public function isClass(string $class, Context\Context $ctx):bool {
         return false;
     }
 
@@ -321,22 +300,43 @@ abstract class Type extends PhpTypeChecker\Node {
     }
 
     /**
-     * @param HasCodeLoc      $loc
-     * @param Context\Context $context
-     * @param Call\CallArg[]  $args
-     * @param bool            $asRef
+     * @param HasCodeLoc           $loc
+     * @param Context\Context      $context
+     * @param Call\EvaledCallArg[] $args
+     * @param bool                 $noErrors
      * @return Type
      */
-    public function call(HasCodeLoc $loc, Context\Context $context, array $args, bool $asRef):self {
+    public function call(HasCodeLoc $loc, Context\Context $context, array $args, bool $noErrors):self {
         return $context->addError("Cannot call $this as a function", $this);
     }
 
-    public function isMixed():bool {
+    /**
+     * Shortcut for `->isEquivelantTo(new Mixed())` that doesn't need a context.
+     * @return bool
+     */
+    public function isExactlyMixed():bool {
         return false;
     }
 
     public function useAsVariableName(HasCodeLoc $loc, Context\Context $context):Type {
         return $context->addError("$this cannot be used as the name of a variable", $loc);
+    }
+
+    public function doForeach(HasCodeLoc $loc, Context\Context $context):ForeachResult {
+        $type = $context->addError("$this cannot be used in 'foreach' or ... (unpack).", $loc);
+        return new ForeachResult($type, $type);
+    }
+}
+
+class ForeachResult {
+    /** @var Type */
+    public $key;
+    /** @var Type */
+    public $val;
+
+    public function __construct(Type $key, Type $val) {
+        $this->key = $key;
+        $this->val = $val;
     }
 }
 
@@ -362,7 +362,7 @@ class Union extends Type {
         }
     }
 
-    public function containsType(Type $type, TypeContext $ctx):bool {
+    public function containsType(Type $type, Context\Context $ctx):bool {
         return $this->any(function (SingleType $t) use ($type, $ctx) {
             return $t->containsType($type, $ctx);
         });
@@ -424,25 +424,25 @@ class Union extends Type {
         });
     }
 
-    public function fillTypeVars(array $vars, TypeContext $ctx):Type {
+    public function fillTypeVars(array $vars, Context\Context $ctx):Type {
         return $this->map(function (Type $t) use ($vars, $ctx) {
             return $t->fillTypeVars($vars, $ctx);
         });
     }
 
-    public function isCallableMethodOf(Type $type, TypeContext $ctx):bool {
+    public function isCallableMethodOf(Type $type, Context\Context $ctx):bool {
         return $this->all(function (SingleType $t) use ($type, $ctx) {
             return $t->isCallableMethodOf($type, $ctx);
         });
     }
 
-    public function hasCallableMethod(string $method, TypeContext $ctx):bool {
+    public function hasCallableMethod(string $method, Context\Context $ctx):bool {
         return $this->all(function (SingleType $t) use ($method, $ctx) {
             return $t->hasCallableMethod($method, $ctx);
         });
     }
 
-    public function asString(TypeContext $ctx, ErrorReceiver $errors):array {
+    public function asString(Context\Context $ctx, ErrorReceiver $errors):array {
         $strings = [];
         foreach ($this->types as $t) {
             foreach ($t->asString($ctx, $errors) as $string) {
@@ -462,16 +462,28 @@ class Union extends Type {
         return $keys;
     }
 
-    public function isMixed():bool {
+    public function isExactlyMixed():bool {
         return $this->all(function (Type $t) {
-            return $t->isMixed();
+            return $t->isExactlyMixed();
         });
     }
 
-    public function isCallable(TypeContext $ctx):bool {
+    public function isCallable(Context\Context $ctx):bool {
         return $this->all(function (SingleType $t) use ($ctx) {
             return $t->isCallable($ctx);
         });
+    }
+
+    public function doForeach(HasCodeLoc $loc, Context\Context $context):ForeachResult {
+        $empty  = new Union($loc);
+        $result = new ForeachResult($empty, $empty);
+        foreach ($this->types as $type) {
+            $foreach = $type->doForeach($loc, $context);
+
+            $result->key = $result->key->addType($foreach->key, $context);
+            $result->val = $result->val->addType($foreach->val, $context);
+        }
+        return $result;
     }
 
     public function isSingleValue($value):bool {
@@ -528,13 +540,13 @@ class Union extends Type {
         });
     }
 
-    public function isArrayOf(Type $type, TypeContext $ctx):bool {
+    public function isArrayOf(Type $type, Context\Context $ctx):bool {
         return $this->all(function (SingleType $t) use ($type, $ctx) {
             return $t->isArrayOf($type, $ctx);
         });
     }
 
-    public function isShape(array $keys, TypeContext $ctx):bool {
+    public function isShape(array $keys, Context\Context $ctx):bool {
         return $this->all(function (SingleType $t) use ($keys, $ctx) {
             return $t->isShape($keys, $ctx);
         });
@@ -546,7 +558,7 @@ class Union extends Type {
         });
     }
 
-    public function isClass(string $class, TypeContext $ctx):bool {
+    public function isClass(string $class, Context\Context $ctx):bool {
         return $this->all(function (SingleType $t) use ($class, $ctx) {
             return $t->isClass($class, $ctx);
         });
@@ -641,12 +653,12 @@ class TypeVar extends SingleType {
         return $this->type->useToSetArrayKey($loc, $context, $array, $value);
     }
 
-    public function call(HasCodeLoc $loc, Context\Context $context, array $args, bool $asRef):Type {
-        return $this->type->call($loc, $context, $args, $asRef);
+    public function call(HasCodeLoc $loc, Context\Context $context, array $args, bool $noErrors):Type {
+        return $this->type->call($loc, $context, $args, $noErrors);
     }
 
-    public function isMixed():bool {
-        return $this->type->isMixed();
+    public function isExactlyMixed():bool {
+        return false;
     }
 
     public function isFalsy():bool {
@@ -657,7 +669,7 @@ class TypeVar extends SingleType {
         return $this->type->isTruthy();
     }
 
-    public function containsType(Type $type, TypeContext $ctx):bool {
+    public function containsType(Type $type, Context\Context $ctx):bool {
         return $type->isTypeVar($this->var);
     }
 
@@ -673,11 +685,15 @@ class TypeVar extends SingleType {
         return $this->type->setArrayKey($loc, $context, $key, $type);
     }
 
+    public function doForeach(HasCodeLoc $loc, Context\Context $context):ForeachResult {
+        return $this->type->doForeach($loc, $context);
+    }
+
     public function asArrayKey(ErrorReceiver $errors):array {
         return $this->type->asArrayKey($errors);
     }
 
-    public function isCallable(TypeContext $ctx):bool {
+    public function isCallable(Context\Context $ctx):bool {
         return $this->type->isCallable($ctx);
     }
 
@@ -709,11 +725,11 @@ class TypeVar extends SingleType {
         return $this->type->isResource();
     }
 
-    public function isArrayOf(Type $type, TypeContext $ctx):bool {
+    public function isArrayOf(Type $type, Context\Context $ctx):bool {
         return $this->type->isArrayOf($type, $ctx);
     }
 
-    public function isShape(array $keys, TypeContext $ctx):bool {
+    public function isShape(array $keys, Context\Context $ctx):bool {
         return $this->type->isShape($keys, $ctx);
     }
 
@@ -721,23 +737,23 @@ class TypeVar extends SingleType {
         return $this->type->isObject();
     }
 
-    public function isClass(string $class, TypeContext $ctx):bool {
+    public function isClass(string $class, Context\Context $ctx):bool {
         return $this->type->isClass($class, $ctx);
     }
 
-    public function fillTypeVars(array $vars, TypeContext $ctx):Type {
+    public function fillTypeVars(array $vars, Context\Context $ctx):Type {
         return $vars[$this->var] ?? $this;
     }
 
-    public function isCallableMethodOf(Type $type, TypeContext $ctx):bool {
+    public function isCallableMethodOf(Type $type, Context\Context $ctx):bool {
         return $this->type->isCallableMethodOf($type, $ctx);
     }
 
-    public function hasCallableMethod(string $method, TypeContext $ctx):bool {
+    public function hasCallableMethod(string $method, Context\Context $ctx):bool {
         return $this->type->hasCallableMethod($method, $ctx);
     }
 
-    public function asString(TypeContext $ctx, ErrorReceiver $errors):array {
+    public function asString(Context\Context $ctx, ErrorReceiver $errors):array {
         return $this->type->asString($ctx, $errors);
     }
 }
@@ -747,7 +763,11 @@ class Mixed extends SingleType {
         return 'mixed';
     }
 
-    public function containsType(Type $type, TypeContext $ctx):bool {
+    public function containsType(Type $type, Context\Context $ctx):bool {
+        return true;
+    }
+
+    public function isExactlyMixed():bool {
         return true;
     }
 }
@@ -798,7 +818,7 @@ class SingleValue extends SingleType {
         }
     }
 
-    public function isCallable(TypeContext $ctx):bool {
+    public function isCallable(Context\Context $ctx):bool {
         $parts = explode('::', (string)$this->value, 2);
         switch (count($parts)) {
             case 1:
@@ -814,7 +834,7 @@ class SingleValue extends SingleType {
         return $this->value === $value;
     }
 
-    public function containsType(Type $type, TypeContext $ctx):bool {
+    public function containsType(Type $type, Context\Context $ctx):bool {
         return $type->isSingleValue($this->value);
     }
 
@@ -838,7 +858,7 @@ class SingleValue extends SingleType {
         return is_null($this->value);
     }
 
-    public function isCallableMethodOf(Type $type, TypeContext $ctx):bool {
+    public function isCallableMethodOf(Type $type, Context\Context $ctx):bool {
         $val = $this->value;
         if (is_string($val)) {
             return $type->hasCallableMethod($val, $ctx);
@@ -847,7 +867,7 @@ class SingleValue extends SingleType {
         }
     }
 
-    public function hasCallableMethod(string $method, TypeContext $ctx):bool {
+    public function hasCallableMethod(string $method, Context\Context $ctx):bool {
         $val = $this->value;
         if (is_string($val)) {
             return $ctx->methodExists($val, $method, true);
@@ -856,7 +876,7 @@ class SingleValue extends SingleType {
         }
     }
 
-    public function asString(TypeContext $ctx, ErrorReceiver $errors):array {
+    public function asString(Context\Context $ctx, ErrorReceiver $errors):array {
         return ["$this->value"];
     }
 
@@ -892,11 +912,11 @@ class SingleValue extends SingleType {
         return !!$this->value;
     }
 
-    public function call(HasCodeLoc $loc, Context\Context $context, array $args, bool $asRef):Type {
+    public function call(HasCodeLoc $loc, Context\Context $context, array $args, bool $noErrors):Type {
         $parts = explode('::', (string)$this->value, 2);
         switch (count($parts)) {
             case 1:
-                return $context->callFunction($loc, $parts[0], $args, $asRef);
+                return $context->callFunction($loc, $parts[0], $args, $noErrors);
             case 2:
                 // TODO
                 // return $globals->callMethod($parts[0], $parts[1], $locals, $errors, $args);
@@ -933,11 +953,11 @@ class Callable_ extends SingleType {
         return 'callable';
     }
 
-    public function isCallable(TypeContext $ctx):bool {
+    public function isCallable(Context\Context $ctx):bool {
         return true;
     }
 
-    public function containsType(Type $type, TypeContext $ctx):bool {
+    public function containsType(Type $type, Context\Context $ctx):bool {
         return $type->isCallable($ctx);
     }
 
@@ -948,17 +968,15 @@ class Callable_ extends SingleType {
     }
 
     /**
-     * @param HasCodeLoc      $loc
-     * @param Context\Context $context
-     * @param Call\CallArg[]  $args
-     * @param bool            $asRef
+     * @param HasCodeLoc           $loc
+     * @param Context\Context      $context
+     * @param Call\EvaledCallArg[] $args
+     * @param bool                 $noErrors
      * @return Type
+     * @internal param bool $asRef
      */
-    public function call(HasCodeLoc $loc, Context\Context $context, array $args, bool $asRef):Type {
-        // We don't know what the function signature is going to be, so just eval the args and return mixed
-        foreach ($args as $arg) {
-            $arg->expr()->checkExpr($context);
-        }
+    public function call(HasCodeLoc $loc, Context\Context $context, array $args, bool $noErrors):Type {
+        // We don't know what the function signature is going to be, so just return mixed
         return new Mixed($this);
     }
 }
@@ -972,11 +990,11 @@ class Float_ extends SingleType {
         return 'float';
     }
 
-    public function containsType(Type $type, TypeContext $ctx):bool {
+    public function containsType(Type $type, Context\Context $ctx):bool {
         return $type->isFloat();
     }
 
-    public function asString(TypeContext $ctx, ErrorReceiver $errors) {
+    public function asString(Context\Context $ctx, ErrorReceiver $errors) {
         return [null];
     }
 
@@ -998,11 +1016,11 @@ class String_ extends SingleType {
         return true;
     }
 
-    public function containsType(Type $type, TypeContext $ctx):bool {
+    public function containsType(Type $type, Context\Context $ctx):bool {
         return $type->isString();
     }
 
-    public function asString(TypeContext $ctx, ErrorReceiver $errors) {
+    public function asString(Context\Context $ctx, ErrorReceiver $errors) {
         return [null];
     }
 
@@ -1024,11 +1042,11 @@ class Int_ extends SingleType {
         return true;
     }
 
-    public function containsType(Type $type, TypeContext $ctx):bool {
+    public function containsType(Type $type, Context\Context $ctx):bool {
         return $type->isInt();
     }
 
-    public function asString(TypeContext $ctx, ErrorReceiver $errors) {
+    public function asString(Context\Context $ctx, ErrorReceiver $errors) {
         return [null];
     }
 
@@ -1050,7 +1068,7 @@ class Object extends SingleType {
         return true;
     }
 
-    public function containsType(Type $type, TypeContext $ctx):bool {
+    public function containsType(Type $type, Context\Context $ctx):bool {
         return $type->isObject();
     }
 }
@@ -1064,11 +1082,11 @@ class Resource extends SingleType {
         return true;
     }
 
-    public function containsType(Type $type, TypeContext $ctx):bool {
+    public function containsType(Type $type, Context\Context $ctx):bool {
         return $type->isResource();
     }
 
-    public function asString(TypeContext $ctx, ErrorReceiver $errors) {
+    public function asString(Context\Context $ctx, ErrorReceiver $errors) {
         return [null];
     }
 
@@ -1097,19 +1115,19 @@ class Class_ extends SingleType {
         return $this->class;
     }
 
-    public function isClass(string $class, TypeContext $ctx):bool {
+    public function isClass(string $class, Context\Context $ctx):bool {
         return $ctx->isCompatible($class, $this->class);
     }
 
-    public function containsType(Type $type, TypeContext $ctx):bool {
+    public function containsType(Type $type, Context\Context $ctx):bool {
         return $type->isClass($this->class, $ctx);
     }
 
-    public function hasCallableMethod(string $method, TypeContext $ctx):bool {
+    public function hasCallableMethod(string $method, Context\Context $ctx):bool {
         return $ctx->methodExists($this->class, $method, false);
     }
 
-    public function asString(TypeContext $ctx, ErrorReceiver $errors) {
+    public function asString(Context\Context $ctx, ErrorReceiver $errors) {
         if ($ctx->methodExists($this->class, '__toString', false)) {
             return [null];
         } else {
@@ -1132,18 +1150,18 @@ class Array_ extends SingleType {
     }
 
     public function toString(bool $atomic = false):string {
-        if ($this->inner->isMixed()) {
+        if ($this->inner->isExactlyMixed()) {
             return 'array';
         } else {
             return $this->inner->toString(true) . '[]';
         }
     }
 
-    public function isArrayOf(Type $type, TypeContext $ctx):bool {
+    public function isArrayOf(Type $type, Context\Context $ctx):bool {
         return $type->containsType($this->inner, $ctx);
     }
 
-    public function containsType(Type $type, TypeContext $ctx):bool {
+    public function containsType(Type $type, Context\Context $ctx):bool {
         return $type->isArrayOf($this->inner, $ctx);
     }
 
@@ -1153,6 +1171,13 @@ class Array_ extends SingleType {
 
     public function setArrayKey(HasCodeLoc $loc, Context\Context $context, string $key, Type $type):Type {
         return $this->addArrayKey($loc, $context, $type);
+    }
+
+    public function doForeach(HasCodeLoc $loc, Context\Context $context):ForeachResult {
+        return new ForeachResult(
+            new Union($this, [new Int_($this), new String_($this)]),
+            $this->inner
+        );
     }
 }
 
@@ -1174,17 +1199,15 @@ class Shape extends SingleType {
         $this->keys = $keys;
     }
 
-    public function get(string $key):Type {
-        if (isset($this->keys[$key])) {
-            return $this->keys[$key];
-        } else {
-            // TODO Log error?
-            // Can't be anything
-            return new Union($this->loc());
-        }
+    public function get(HasCodeLoc $loc, string $key, Context\Context $context):Type {
+        return $this->keys[$key] ?? $context->addError("Undefined key '$key'", $loc);
     }
 
-    public function isCallable(TypeContext $ctx):bool {
+    public function merge(Context\Context $context, self $that):self {
+        return new self($this, merge_types($this->keys, $that->keys, $context));
+    }
+
+    public function isCallable(Context\Context $ctx):bool {
         if (
             isset($this->keys[0]) &&
             isset($this->keys[1])
@@ -1195,10 +1218,10 @@ class Shape extends SingleType {
         }
     }
 
-    public function all():Type {
-        $type = Type::none($this->loc());
+    public function all(Context\Context $context):Type {
+        $type = Type::none($this);
         foreach ($this->keys as $t) {
-            $type = $type->addType($t, new DummyTypeContext());
+            $type = $type->addType($t, $context);
         }
         return $type;
     }
@@ -1207,12 +1230,25 @@ class Shape extends SingleType {
         return 'array';
     }
 
-    public function isArrayOf(Type $type, TypeContext $ctx):bool {
-        return $type->containsType($this->all(), $ctx);
+    public function doForeach(HasCodeLoc $loc, Context\Context $context):ForeachResult {
+        $empty   = new Union($this);
+        $foreach = new ForeachResult($empty, $empty);
+        foreach ($this->keys as $k => $v) {
+            $key = new SingleValue($this, $k);
+            $val = $v;
+
+            $foreach->key = $foreach->key->addType($key, $context);
+            $foreach->val = $foreach->val->addType($val, $context);
+        }
+        return $foreach;
+    }
+
+    public function isArrayOf(Type $type, Context\Context $ctx):bool {
+        return $type->containsType($this->all($ctx), $ctx);
     }
 
     public function addArrayKey(HasCodeLoc $loc, Context\Context $context, Type $type):Type {
-        return (new Array_($this, $this->all()))->addArrayKey($loc, $context, $type);
+        return (new Array_($this, $this->all($context)))->addArrayKey($loc, $context, $type);
     }
 
     public function setArrayKey(HasCodeLoc $loc, Context\Context $context, string $key, Type $type):Type {
@@ -1222,11 +1258,11 @@ class Shape extends SingleType {
     }
 
     /**
-     * @param Type[]      $keys
-     * @param TypeContext $ctx
+     * @param Type[]          $keys
+     * @param Context\Context $ctx
      * @return bool
      */
-    public function isShape(array $keys, TypeContext $ctx):bool {
+    public function isShape(array $keys, Context\Context $ctx):bool {
         // Any difference in keys means they are not compatible
         if (
             array_diff_key($keys, $this->keys) ||
@@ -1244,7 +1280,7 @@ class Shape extends SingleType {
         return true;
     }
 
-    public function containsType(Type $type, TypeContext $ctx):bool {
+    public function containsType(Type $type, Context\Context $ctx):bool {
         return $type->isShape($this->keys, $ctx);
     }
 

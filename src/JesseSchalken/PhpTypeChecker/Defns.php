@@ -17,15 +17,6 @@ interface HasNamespace {
 }
 
 abstract class Definition extends Stmt\SingleStmt {
-    public final function findDefinitions():array {
-        $decls   = parent::findDefinitions();
-        $decls[] = $this;
-        return $decls;
-    }
-
-    public function localSubStmts():array {
-        return [];
-    }
 }
 
 abstract class GlobalDefinition extends Definition {
@@ -54,7 +45,7 @@ abstract class VariableType extends Definition {
         return $this->type;
     }
 
-    public function subStmts():array {
+    public function subStmts(bool $deep):array {
         return [];
     }
 
@@ -64,9 +55,9 @@ abstract class VariableType extends Definition {
 }
 
 class GlobalVariableType extends VariableType {
-    public function gatherGlobalDecls(Context\Context $decls) {
-        parent::gatherGlobalDecls($decls);
-        $decls->addGlobal($this->name(), $this->type());
+    public function gatherGlobalDecls(Context\Context $context) {
+        parent::gatherGlobalDecls($context);
+        $context->addGlobal($this->name(), $this->type());
     }
 }
 
@@ -86,7 +77,7 @@ class Label_ extends LocalDefinition {
         $this->name = $name;
     }
 
-    public function subStmts():array {
+    public function subStmts(bool $deep):array {
         return [];
     }
 
@@ -107,9 +98,9 @@ class Const_ extends GlobalDefinition implements HasNamespace {
     private $value;
 
     /**
-     * @param HasCodeLoc   $loc
-     * @param string    $name
-     * @param Expr\Expr $value
+     * @param HasCodeLoc $loc
+     * @param string     $name
+     * @param Expr\Expr  $value
      */
     public function __construct(HasCodeLoc $loc, string $name, Expr\Expr $value) {
         parent::__construct($loc);
@@ -121,7 +112,7 @@ class Const_ extends GlobalDefinition implements HasNamespace {
         return $this->name;
     }
 
-    public function subStmts():array {
+    public function subStmts(bool $deep):array {
         return [$this->value];
     }
 
@@ -140,9 +131,9 @@ class Const_ extends GlobalDefinition implements HasNamespace {
         return extract_namespace($this->name());
     }
 
-    public function gatherGlobalDecls(Context\Context $decls) {
-        parent::gatherGlobalDecls($decls);
-        $decls->addConstant($this->name, $this->value);
+    public function gatherGlobalDecls(Context\Context $context) {
+        parent::gatherGlobalDecls($context);
+        $context->addConstant($this->name, $this->value);
     }
 }
 
@@ -165,9 +156,11 @@ class FunctionDefinition extends GlobalDefinition implements HasNamespace {
         return $this->name;
     }
 
-    public function subStmts():array {
-        $stmts   = $this->type->subStmts();
-        $stmts[] = $this->body;
+    public function subStmts(bool $deep):array {
+        $stmts = $this->type->subStmts();
+        if ($deep) {
+            $stmts[] = $this->body;
+        }
         return $stmts;
     }
 
@@ -187,9 +180,9 @@ class FunctionDefinition extends GlobalDefinition implements HasNamespace {
         return extract_namespace($this->name());
     }
 
-    public function gatherGlobalDecls(Context\Context $decls) {
-        parent::gatherGlobalDecls($decls);
-        $decls->addFunction($this->name, $this->type);
+    public function gatherGlobalDecls(Context\Context $context) {
+        parent::gatherGlobalDecls($context);
+        $context->addFunction($this->name, $this->type);
     }
 
     public function checkStmt(Context\Context $context) {
@@ -220,14 +213,18 @@ abstract class Classish extends GlobalDefinition implements HasNamespace {
      */
     public abstract function members():array;
 
-    public function subStmts():array {
-        $stmts = [];
-        foreach ($this->members() as $member) {
-            foreach ($member->subStmts() as $stmt) {
-                $stmts[] = $stmt;
+    public final function subStmts(bool $deep):array {
+        if ($deep) {
+            $stmts = [];
+            foreach ($this->members() as $member) {
+                foreach ($member->subStmts() as $stmt) {
+                    $stmts[] = $stmt;
+                }
             }
+            return $stmts;
+        } else {
+            return [];
         }
-        return $stmts;
     }
 
     /**
@@ -251,7 +248,7 @@ class Trait_ extends Classish {
     private $members = [];
 
     /**
-     * @param HasCodeLoc       $loc
+     * @param HasCodeLoc    $loc
      * @param string        $name
      * @param ClassMember[] $members
      */
@@ -285,7 +282,7 @@ class Class_ extends Classish {
     private $final;
 
     /**
-     * @param HasCodeLoc       $loc
+     * @param HasCodeLoc    $loc
      * @param string        $name
      * @param ClassMember[] $members
      * @param string|null   $parent
@@ -345,10 +342,10 @@ class Interface_ extends Classish {
     private $extends = [];
 
     /**
-     * @param HasCodeLoc   $loc
-     * @param string    $name
-     * @param string[]  $extends
-     * @param Method_[] $methods
+     * @param HasCodeLoc $loc
+     * @param string     $name
+     * @param string[]   $extends
+     * @param Method_[]  $methods
      */
     public function __construct(HasCodeLoc $loc, string $name, array $extends, array $methods) {
         parent::__construct($loc, $name);
@@ -397,14 +394,12 @@ class ClassConstant extends AbstractClassMember {
     }
 
     public function unparse():\PhpParser\Node {
-        return new \PhpParser\Node\Stmt\ClassConst(
-            [
-                new \PhpParser\Node\Const_(
-                    $this->name,
-                    $this->value->unparseExpr()
-                ),
-            ]
-        );
+        return new \PhpParser\Node\Stmt\ClassConst([
+            new \PhpParser\Node\Const_(
+                $this->name,
+                $this->value->unparseExpr()
+            ),
+        ]);
     }
 
     public function subStmts():array {
@@ -425,8 +420,8 @@ class UseTrait extends AbstractClassMember {
     private $aliases = [];
 
     /**
-     * @param HasCodeLoc  $loc
-     * @param string[] $traits
+     * @param HasCodeLoc $loc
+     * @param string[]   $traits
      */
     public function __construct(HasCodeLoc $loc, array $traits) {
         parent::__construct($loc);
@@ -534,7 +529,7 @@ class UseTraitAlias extends Node {
     private $visibility;
 
     /**
-     * @param HasCodeLoc     $loc
+     * @param HasCodeLoc  $loc
      * @param string      $alias
      * @param string      $method
      * @param null|string $trait
@@ -570,8 +565,8 @@ abstract class ClassMember extends AbstractClassMember {
 
     /**
      * @param HasCodeLoc $loc
-     * @param string  $visibility
-     * @param bool    $static
+     * @param string     $visibility
+     * @param bool       $static
      */
     public function __construct(HasCodeLoc $loc, string $visibility, bool $static) {
         parent::__construct($loc);
@@ -614,7 +609,7 @@ class Property extends ClassMember {
     private $default = null;
 
     /**
-     * @param HasCodeLoc        $loc
+     * @param HasCodeLoc     $loc
      * @param string         $name
      * @param Type\Type      $type
      * @param Expr\Expr|null $default
@@ -661,7 +656,7 @@ class Method_ extends ClassMember {
     private $final;
 
     /**
-     * @param HasCodeLoc             $loc
+     * @param HasCodeLoc          $loc
      * @param string              $name
      * @param Function_\Function_ $type
      * @param Stmt\Block|null     $body
@@ -690,7 +685,7 @@ class Method_ extends ClassMember {
     }
 
     public function isFinal():bool {
-        return $this->final ? true : false;
+        return $this->final;
     }
 
     public function subStmts():array {

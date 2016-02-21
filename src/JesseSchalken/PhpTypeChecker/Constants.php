@@ -16,7 +16,7 @@ class GetConstant extends Expr\Expr {
         $this->name = $name;
     }
 
-    public function subStmts():array {
+    public function subStmts(bool $deep):array {
         return [];
     }
 
@@ -24,12 +24,12 @@ class GetConstant extends Expr\Expr {
         return new \PhpParser\Node\Expr\ConstFetch(new \PhpParser\Node\Name\FullyQualified($this->name));
     }
 
-    public function checkExpr(Context\Context $context):Type\Type {
+    public function checkExpr(Context\Context $context, bool $noErrors):Type\Type {
         $expr = $context->getConstant($this->name);
         if (!$expr) {
             return $context->addError("Undefined constant '$this->name'", $this);
         } else {
-            return $expr->checkExpr($context);
+            return $expr->checkExpr($context, $noErrors);
         }
     }
 }
@@ -46,7 +46,7 @@ class GetClassConstant extends Expr\Expr {
         $this->const = $const;
     }
 
-    public function subStmts():array {
+    public function subStmts(bool $deep):array {
         return [$this->class];
     }
 
@@ -57,7 +57,7 @@ class GetClassConstant extends Expr\Expr {
         );
     }
 
-    public function checkExpr(Context\Context $context):Type\Type {
+    public function checkExpr(Context\Context $context, bool $noErrors):Type\Type {
         // TODO
     }
 }
@@ -103,7 +103,7 @@ class GetMagicConst extends Expr\Expr {
         $this->value = $value;
     }
 
-    public function subStmts():array {
+    public function subStmts(bool $deep):array {
         return [];
     }
 
@@ -130,7 +130,7 @@ class GetMagicConst extends Expr\Expr {
         }
     }
 
-    public function checkExpr(Context\Context $context):Type\Type {
+    public function checkExpr(Context\Context $context, bool $noErrors):Type\Type {
         return new Type\SingleValue($this, $this->value);
     }
 }
@@ -175,7 +175,7 @@ class Literal extends Expr\Expr {
         $this->value = $value;
     }
 
-    public function subStmts():array {
+    public function subStmts(bool $deep):array {
         return [];
     }
 
@@ -204,7 +204,7 @@ class Literal extends Expr\Expr {
         return $this->value;
     }
 
-    public function checkExpr(Context\Context $context):Type\Type {
+    public function checkExpr(Context\Context $context, bool $noErrors):Type\Type {
         return new Type\SingleValue($this, $this->value);
     }
 }

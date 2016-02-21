@@ -49,7 +49,9 @@ s
     $output = $args['OUT_DIR'];
     $files  = recursive_scan2($input);
     foreach ($args['--include'] as $include) {
-        $files = array_merge($files, recursive_scan2($include));
+        foreach (recursive_scan2($include) as $file) {
+            $files[] = $file;
+        }
     }
     $files = array_unique($files);
     sort($files, SORT_STRING);

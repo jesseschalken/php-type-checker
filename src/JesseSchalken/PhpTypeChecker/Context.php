@@ -12,7 +12,7 @@ use JesseSchalken\PhpTypeChecker\Call;
 use function JesseSchalken\PhpTypeChecker\normalize_constant;
 use function JesseSchalken\PhpTypeChecker\str_ieq;
 
-class Context implements Type\TypeContext {
+class Context {
     /** @var ErrorReceiver */
     private $errors;
     /** @var Type\Type[] */
@@ -103,10 +103,15 @@ class Context implements Type\TypeContext {
     }
 
     public function functionExists(string $name):bool {
-        return false;
+        return !!$this->getFunction($name);
     }
 
-    public function methodExists(string $class, string $method, bool $static):bool {
+    public function methodExists(string $class, string $method, bool $staticOnly):bool {
+        if ($class_ = $this->getClass($class)) {
+            if ($method = $class_->methods->get($method)) {
+                return $staticOnly && $method->static ? false : true;
+            }
+        }
         return false;
     }
 
@@ -115,16 +120,16 @@ class Context implements Type\TypeContext {
     }
 
     /**
-     * @param HasCodeLoc     $loc
-     * @param string         $name
-     * @param Call\CallArg[] $args
-     * @param bool           $asRef
+     * @param HasCodeLoc           $loc
+     * @param string               $name
+     * @param Call\EvaledCallArg[] $args
+     * @param bool                 $noErrors
      * @return Type\Type
      */
-    public function callFunction(HasCodeLoc $loc, string $name, array $args, bool $asRef) {
+    public function callFunction(HasCodeLoc $loc, string $name, array $args, bool $noErrors) {
         $function = $this->getFunction($name);
         if ($function) {
-            return $function->call($loc, $this, $args, $asRef);
+            return $function->call($loc, $this, $args, $noErrors);
         } else {
             return $this->addError("Undefined function '$name'", $loc);
         }
@@ -134,6 +139,7 @@ class Context implements Type\TypeContext {
         $clone         = clone $this;
         $clone->labels = [];
         $clone->locals = [];
+        $clone->return = new Type\Mixed(new CodeLoc('', 1, 1));
         return $clone;
     }
 
@@ -241,6 +247,7 @@ class ClassProperties extends ClassMembers {
 }
 
 class ClassMethods extends ClassMembers {
+    /** @var MethodDecl[] */
     private $methods = [];
 
     public function get(string $name) {
@@ -257,6 +264,7 @@ class ClassMethods extends ClassMembers {
 }
 
 class ClassConstants extends ClassMembers {
+    /** @var Type\Type */
     private $constants = [];
 
     public function get(string $name) {

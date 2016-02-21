@@ -13,6 +13,7 @@ use function JesseSchalken\MagicUtils\clone_ref;
 use function JesseSchalken\PhpTypeChecker\extract_namespace;
 use function JesseSchalken\PhpTypeChecker\recursive_scan2;
 use function JesseSchalken\PhpTypeChecker\remove_namespace;
+use function JesseSchalken\PhpTypeChecker\merge_types;
 
 abstract class Stmt extends Node {
     /**
@@ -21,55 +22,59 @@ abstract class Stmt extends Node {
     public abstract function split():array;
 
     /**
+     * @param bool $deep If true, also return statements/expressions that belong to different scopes (eg, inside a
+     *                   function/class definition). If false, only return statements/expressions that are evaluated in
+     *                   the same scope.
      * @return Stmt[]
      */
-    public abstract function subStmts():array;
+    public abstract function subStmts(bool $deep):array;
 
     /**
-     * Same as subStmts() but doesn't descend into class/function definitions
-     * @return Stmt[]
+     * Infer local variables based on direct assignments of the form "$foo = ...". "$context" will already have local
+     * variables based on explicit "@var" doc comments, and parameters.
+     * @param Context\Context $context
+     * @return Type\Type[]
      */
-    public function localSubStmts():array {
-        return $this->subStmts();
+    public final function inferLocals(Context\Context $context):array {
+        $res = [];
+        foreach ($this->subStmts(false) as $stmt) {
+            $res = merge_types($stmt->inferLocals($context), $res, $context);
+        }
+        return $res;
+    }
+
+    /**
+     * @param Context\Context $context
+     * @return Type\Type[]
+     */
+    protected function inferLocals_(Context\Context $context):array {
+        return [];
     }
 
     public final function namespaces():array {
         $namespaces = [];
-        foreach ($this->findDefinitions() as $decl) {
-            if ($decl instanceof Defns\HasNamespace) {
-                $namespaces[] = $decl->namespace_();
+        foreach ($this->subStmts(true) as $stmt) {
+            if ($stmt instanceof Defns\HasNamespace) {
+                $namespaces[] = $stmt->namespace_();
             }
         }
         return array_unique($namespaces);
     }
 
-    /**
-     * @return Defns\Definition[]
-     */
-    public function findDefinitions():array {
-        $decls = [];
-        foreach ($this->subStmts() as $stmt) {
-            foreach ($stmt->findDefinitions() as $decl) {
-                $decls[] = $decl;
-            }
-        }
-        return $decls;
-    }
-
-    public function gatherGlobalDecls(Context\Context $decls) {
-        foreach ($this->subStmts() as $stmt) {
-            $stmt->gatherGlobalDecls($decls);
+    public function gatherGlobalDecls(Context\Context $context) {
+        foreach ($this->subStmts(true) as $stmt) {
+            $stmt->gatherGlobalDecls($context);
         }
     }
 
     public function gatherLocalDecls(Context\Context $context) {
-        foreach ($this->localSubStmts() as $stmt) {
+        foreach ($this->subStmts(false) as $stmt) {
             $stmt->gatherLocalDecls($context);
         }
     }
 
     public function checkStmt(Context\Context $context) {
-        foreach ($this->subStmts() as $stmt) {
+        foreach ($this->subStmts(true) as $stmt) {
             $stmt->checkStmt($context);
         }
     }
@@ -159,7 +164,7 @@ class Block extends Stmt {
         $this->stmts[] = $stmt;
     }
 
-    public function subStmts():array {
+    public function subStmts(bool $deep):array {
         return $this->stmts;
     }
 
@@ -198,7 +203,7 @@ class Return_ extends SingleStmt {
         $this->expr = $expr;
     }
 
-    public function subStmts():array {
+    public function subStmts(bool $deep):array {
         return $this->expr ? [$this->expr] : [];
     }
 
@@ -216,7 +221,7 @@ class InlineHTML extends SingleStmt {
         $this->html = $html;
     }
 
-    public function subStmts():array {
+    public function subStmts(bool $deep):array {
         return [];
     }
 
@@ -238,7 +243,7 @@ class Echo_ extends SingleStmt {
         $this->exprs = $exprs;
     }
 
-    public function subStmts():array {
+    public function subStmts(bool $deep):array {
         return $this->exprs;
     }
 
@@ -264,7 +269,7 @@ class Throw_ extends SingleStmt {
         $this->expr = $expr;
     }
 
-    public function subStmts():array {
+    public function subStmts(bool $deep):array {
         return [$this->expr];
     }
 
@@ -292,7 +297,7 @@ class StaticVar extends SingleStmt {
         $this->value = $value;
     }
 
-    public function subStmts():array {
+    public function subStmts(bool $deep):array {
         return $this->value ? [$this->value] : [];
     }
 
@@ -321,7 +326,7 @@ class Break_ extends SingleStmt {
         $this->levels = $levels;
     }
 
-    public function subStmts():array {
+    public function subStmts(bool $deep):array {
         return [];
     }
 
@@ -346,7 +351,7 @@ class Continue_ extends SingleStmt {
         $this->levels = $levels;
     }
 
-    public function subStmts():array {
+    public function subStmts(bool $deep):array {
         return [];
     }
 
@@ -371,7 +376,7 @@ class Unset_ extends SingleStmt {
         $this->exprs = $exprs;
     }
 
-    public function subStmts():array {
+    public function subStmts(bool $deep):array {
         return $this->exprs;
     }
 
@@ -397,7 +402,7 @@ class Global_ extends SingleStmt {
         $this->expr = $expr;
     }
 
-    public function subStmts():array {
+    public function subStmts(bool $deep):array {
         return [$this->expr];
     }
 
@@ -417,7 +422,7 @@ class Goto_ extends SingleStmt {
         $this->name = $name;
     }
 
-    public function subStmts():array {
+    public function subStmts(bool $deep):array {
         return [];
     }
 

@@ -35,7 +35,7 @@ class DoWhile extends ControlStructure {
         $this->cond = $cond;
     }
 
-    public function subStmts():array {
+    public function subStmts(bool $deep):array {
         return [$this->body, $this->cond];
     }
 
@@ -62,7 +62,7 @@ class If_ extends ControlStructure {
         $this->false = $false;
     }
 
-    public function subStmts():array {
+    public function subStmts(bool $deep):array {
         return [$this->cond, $this->true, $this->false];
     }
 
@@ -131,7 +131,7 @@ class Foreach_ extends ControlStructure {
         $this->byRef = $byRef;
     }
 
-    public function subStmts():array {
+    public function subStmts(bool $deep):array {
         $stmts = [
             $this->array,
             $this->value,
@@ -174,7 +174,7 @@ class ForComma extends Stmt\Stmt {
         $this->exprs = $exprs;
     }
 
-    public function subStmts():array {
+    public function subStmts(bool $deep):array {
         return $this->exprs;
     }
 
@@ -210,7 +210,7 @@ class For_ extends ControlStructure {
         $this->body = $body;
     }
 
-    public function subStmts():array {
+    public function subStmts(bool $deep):array {
         return [
             $this->init,
             $this->cond,
@@ -248,7 +248,7 @@ class Switch_ extends ControlStructure {
         $this->cases = $cases;
     }
 
-    public function subStmts():array {
+    public function subStmts(bool $deep):array {
         $stmts = [$this->expr];
         foreach ($this->cases as $case) {
             foreach ($case->subStmts() as $stmt) {
@@ -320,7 +320,7 @@ class While_ extends ControlStructure {
         $this->body = $body;
     }
 
-    public function subStmts():array {
+    public function subStmts(bool $deep):array {
         return [$this->cond, $this->body];
     }
 
@@ -353,7 +353,7 @@ class Try_ extends ControlStructure {
         $this->finally = $finally;
     }
 
-    public function subStmts():array {
+    public function subStmts(bool $deep):array {
         $stmts = [$this->body];
         foreach ($this->catches as $catch) {
             foreach ($catch->subStmts() as $stmt) {

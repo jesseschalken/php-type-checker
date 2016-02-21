@@ -24,7 +24,7 @@ class Variable extends LValue {
         $this->name = $name;
     }
 
-    public function subStmts():array {
+    public function subStmts(bool $deep):array {
         return [$this->name];
     }
 
@@ -32,8 +32,8 @@ class Variable extends LValue {
         return new \PhpParser\Node\Expr\Variable($this->name->unparseExprOrString());
     }
 
-    public function checkExpr(Context\Context $context):Type\Type {
-        return $this->name->checkExpr($context)->useAsVariableName($this, $context);
+    public function checkExpr(Context\Context $context, bool $noErrors):Type\Type {
+        return $this->name->checkExpr($context, $noErrors)->useAsVariableName($this, $context);
     }
 }
 
@@ -72,7 +72,7 @@ class SuperGlobalAccess extends LValue {
         $this->global = $global;
     }
 
-    public function subStmts():array {
+    public function subStmts(bool $deep):array {
         return [];
     }
 
@@ -80,7 +80,7 @@ class SuperGlobalAccess extends LValue {
         return new \PhpParser\Node\Expr\Variable($this->global->value());
     }
 
-    public function checkExpr(Context\Context $context):Type\Type {
+    public function checkExpr(Context\Context $context, bool $noErrors):Type\Type {
         $global = $this->global->value();
         $type   = $context->getGlobal($global);
         if ($type === null) {
@@ -112,7 +112,7 @@ class Property extends LValue {
         return $this->object->isLValue();
     }
 
-    public function subStmts():array {
+    public function subStmts(bool $deep):array {
         return [$this->object, $this->property];
     }
 
@@ -123,7 +123,7 @@ class Property extends LValue {
         );
     }
 
-    public function checkExpr(Context\Context $context):Type\Type {
+    public function checkExpr(Context\Context $context, bool $noErrors):Type\Type {
         // TODO: Implement getType() method.
     }
 }
@@ -144,7 +144,7 @@ class StaticProperty extends LValue {
         return true;
     }
 
-    public function subStmts():array {
+    public function subStmts(bool $deep):array {
         return [$this->class, $this->property];
     }
 
@@ -155,7 +155,7 @@ class StaticProperty extends LValue {
         );
     }
 
-    public function checkExpr(Context\Context $context):Type\Type {
+    public function checkExpr(Context\Context $context, bool $noErrors):Type\Type {
         // TODO: Implement getType() method.
     }
 }
@@ -181,7 +181,7 @@ class ArrayAccess extends LValue {
         return $this->array->isLValue();
     }
 
-    public function subStmts():array {
+    public function subStmts(bool $deep):array {
         return $this->key ? [$this->array, $this->key] : [$this->array];
     }
 
@@ -192,7 +192,7 @@ class ArrayAccess extends LValue {
         );
     }
 
-    public function checkExpr(Context\Context $context):Type\Type {
+    public function checkExpr(Context\Context $context, bool $noErrors):Type\Type {
         // TODO: Implement getType() method.
     }
 }
@@ -210,7 +210,7 @@ class List_ extends Expr\Expr {
         $this->exprs = $exprs;
     }
 
-    public function subStmts():array {
+    public function subStmts(bool $deep):array {
         $stmts = [];
         foreach ($this->exprs as $expr) {
             if ($expr) {
@@ -229,7 +229,7 @@ class List_ extends Expr\Expr {
         return new \PhpParser\Node\Expr\List_($exprs);
     }
 
-    public function checkExpr(Context\Context $context):Type\Type {
+    public function checkExpr(Context\Context $context, bool $noErrors):Type\Type {
         $items = [];
         foreach ($this->exprs as $k => $v) {
             if ($v) {

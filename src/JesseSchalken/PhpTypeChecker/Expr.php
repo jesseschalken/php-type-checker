@@ -43,14 +43,16 @@ abstract class Expr extends Stmt\SingleStmt {
     }
 
     public final function checkStmt(Context\Context $context) {
-        $this->checkExpr($context);
+        $this->checkExpr($context, false);
     }
 
     /**
      * @param Context\Context $context
+     * @param bool            $noErrors If true, don't report any errors. Just do the minimal amount of work required
+     *                                  to get the return type of this expression.
      * @return Type\Type
      */
-    public abstract function checkExpr(Context\Context $context):Type\Type;
+    public abstract function checkExpr(Context\Context $context, bool $noErrors):Type\Type;
 }
 
 class Yield_ extends Expr {
@@ -65,7 +67,7 @@ class Yield_ extends Expr {
         $this->val = $val;
     }
 
-    public function subStmts():array {
+    public function subStmts(bool $deep):array {
         $stmts = [];
         if ($this->key) {
             $stmts[] = $this->key;
@@ -83,8 +85,8 @@ class Yield_ extends Expr {
         );
     }
 
-    public function checkExpr(Context\Context $context):Type\Type {
-        return new Type\Mixed($this->loc());
+    public function checkExpr(Context\Context $context, bool $noErrors):Type\Type {
+        return new Type\Mixed($this);
     }
 }
 
@@ -103,7 +105,7 @@ class Include_ extends Expr {
         $this->expr    = $expr;
     }
 
-    public function subStmts():array {
+    public function subStmts(bool $deep):array {
         return [$this->expr];
     }
 
@@ -119,8 +121,8 @@ class Include_ extends Expr {
         return new \PhpParser\Node\Expr\Include_($this->expr->unparseExpr(), $type);
     }
 
-    public function checkExpr(Context\Context $context):Type\Type {
-        return new Type\Mixed($this->loc());
+    public function checkExpr(Context\Context $context, bool $noErrors):Type\Type {
+        return new Type\Mixed($this);
     }
 }
 
@@ -137,7 +139,7 @@ class Array_ extends Expr {
         $this->items = $items;
     }
 
-    public function subStmts():array {
+    public function subStmts(bool $deep):array {
         $stmts = [];
         foreach ($this->items as $item) {
             foreach ($item->subStmts() as $stmt) {
@@ -155,10 +157,10 @@ class Array_ extends Expr {
         return new \PhpParser\Node\Expr\Array_($items);
     }
 
-    public function checkExpr(Context\Context $context):Type\Type {
+    public function checkExpr(Context\Context $context, bool $noErrors):Type\Type {
         $array = new Type\Shape($this, []);
         foreach ($this->items as $item) {
-            $array = $item->apply($context, $array);
+            $array = $item->apply($array, $context, $noErrors);
         }
         return $array;
     }
@@ -193,11 +195,11 @@ class ArrayItem extends Node {
         return $stmts;
     }
 
-    public function apply(Context\Context $context, Type\Type $array) {
+    public function apply(Type\Type $array, Context\Context $context, bool $noErrors) {
         $key = $this->key;
-        $val = $this->value->checkExpr($context);
+        $val = $this->value->checkExpr($context, $noErrors);
         if ($key) {
-            return $key->checkExpr($context)->useToSetArrayKey($this, $context, $array, $val);
+            return $key->checkExpr($context, $noErrors)->useToSetArrayKey($this, $context, $array, $val);
         } else {
             return $array->addArrayKey($this, $context, $val);
         }
@@ -243,14 +245,12 @@ class Closure extends Expr {
         $this->body   = $body;
     }
 
-    public function subStmts():array {
-        $stmts = [$this->body];
-        $stmts = array_merge($stmts, $this->type->subStmts());
+    public function subStmts(bool $deep):array {
+        $stmts = $this->type->subStmts();
+        if ($deep) {
+            $stmts[] = $this->body;
+        }
         return $stmts;
-    }
-
-    public function localSubStmts():array {
-        return $this->type->subStmts();
     }
 
     public function unparseExpr():\PhpParser\Node\Expr {
@@ -268,7 +268,7 @@ class Closure extends Expr {
         ]));
     }
 
-    public function checkExpr(Context\Context $context):Type\Type {
+    public function checkExpr(Context\Context $context, bool $noErrors):Type\Type {
         return new Type\Class_($this, 'Closure');
     }
 }
@@ -305,7 +305,7 @@ class Ternary extends Expr {
         $this->false = $false;
     }
 
-    public function subStmts():array {
+    public function subStmts(bool $deep):array {
         $stmts = [$this->cond, $this->false];
         if ($this->true) {
             $stmts[] = $this->true;
@@ -321,16 +321,16 @@ class Ternary extends Expr {
         );
     }
 
-    public function checkExpr(Context\Context $context):Type\Type {
+    public function checkExpr(Context\Context $context, bool $noErrors):Type\Type {
         // TODO Apply type gaurds in $this->cond
 
         if ($this->true) {
-            $true = $this->true->checkExpr($context);
+            $true = $this->true->checkExpr($context, $noErrors);
         } else {
-            $true = $this->cond->checkExpr($context)->removeFalsy($context);
+            $true = $this->cond->checkExpr($context, $noErrors)->removeFalsy($context);
         }
 
-        $false = $this->false->checkExpr($context);
+        $false = $this->false->checkExpr($context, $noErrors);
 
         return Type\Type::union($this, [$true, $false,]);
     }
@@ -365,7 +365,7 @@ class ConcatMany extends Expr {
         $this->exprs = $exprs;
     }
 
-    public function subStmts():array {
+    public function subStmts(bool $deep):array {
         return $this->exprs;
     }
 
@@ -373,7 +373,7 @@ class ConcatMany extends Expr {
         return new \PhpParser\Node\Scalar\Encapsed(self::unparseEncaps($this->exprs));
     }
 
-    public function checkExpr(Context\Context $context):Type\Type {
+    public function checkExpr(Context\Context $context, bool $noErrors):Type\Type {
         // TODO Make this really smart and return a SingleValue (or union thereof) if it can
         return new Type\String_($this);
     }
@@ -392,7 +392,7 @@ class Isset_ extends Expr {
         $this->exprs = $exprs;
     }
 
-    public function subStmts():array {
+    public function subStmts(bool $deep):array {
         return $this->exprs;
     }
 
@@ -404,8 +404,8 @@ class Isset_ extends Expr {
         return new \PhpParser\Node\Expr\Isset_($exprs);
     }
 
-    public function checkExpr(Context\Context $context):Type\Type {
-        return new Type\Int_($this->loc());
+    public function checkExpr(Context\Context $context, bool $noErrors):Type\Type {
+        return new Type\Int_($this);
     }
 }
 
@@ -480,7 +480,7 @@ class BinOp extends Expr {
         $this->right = $right;
     }
 
-    public function subStmts():array {
+    public function subStmts(bool $deep):array {
         return [$this->left, $this->right];
     }
 
@@ -583,7 +583,7 @@ class BinOp extends Expr {
         }
     }
 
-    public function checkExpr(Context\Context $context):Type\Type {
+    public function checkExpr(Context\Context $context, bool $noErrors):Type\Type {
         switch ($this->type) {
             case self:: INSTANCEOF:
                 return Type\Type::bool($this);
@@ -621,8 +621,8 @@ class BinOp extends Expr {
                 ]);
 
             case self::COALESCE:
-                $left  = $this->left->checkExpr($context)->removeNull($context);
-                $right = $this->right->checkExpr($context);
+                $left  = $this->left->checkExpr($context, $noErrors)->removeNull($context);
+                $right = $this->right->checkExpr($context, $noErrors);
                 return Type\Type::union($this, [$left, $right]);
 
             case self::BOOl_AND:
@@ -638,7 +638,7 @@ class BinOp extends Expr {
 
             case self::ASSIGN:
             case self::ASSIGN_REF:
-                return $this->right->checkExpr($context);
+                return $this->right->checkExpr($context, $noErrors);
 
             case self::ASSIGN_ADD:
             case self::ASSIGN_SUBTRACT:
@@ -684,7 +684,7 @@ class Cast extends Expr {
         $this->expr = $expr;
     }
 
-    public function subStmts():array {
+    public function subStmts(bool $deep):array {
         return [$this->expr];
     }
 
@@ -710,7 +710,7 @@ class Cast extends Expr {
         }
     }
 
-    public function checkExpr(Context\Context $context):Type\Type {
+    public function checkExpr(Context\Context $context, bool $noErrors):Type\Type {
         switch ($this->type) {
             case self::INT:
                 return new Type\Int_($this);
@@ -758,7 +758,7 @@ class UnOp extends Expr {
         $this->expr = $expr;
     }
 
-    public function subStmts():array {
+    public function subStmts(bool $deep):array {
         return [$this->expr];
     }
 
@@ -796,7 +796,7 @@ class UnOp extends Expr {
         }
     }
 
-    public function checkExpr(Context\Context $context):Type\Type {
+    public function checkExpr(Context\Context $context, bool $noErrors):Type\Type {
         switch ($this->type) {
             case self::PRE_INC:
             case self::PRE_DEC:
@@ -804,7 +804,7 @@ class UnOp extends Expr {
 
             case self::POST_INC:
             case self::POST_DEC:
-                return $this->expr->checkExpr($context);
+                return $this->expr->checkExpr($context, $noErrors);
 
             case self::PRINT:
                 // "print ..." always evaluates to int(1)
@@ -821,7 +821,7 @@ class UnOp extends Expr {
                 return Type\Type::number($this);
 
             case self::SUPPRESS:
-                return $this->expr->checkExpr($context);
+                return $this->expr->checkExpr($context, $noErrors);
 
             case self::EMPTY:
                 return Type\Type::bool($this);
@@ -830,7 +830,7 @@ class UnOp extends Expr {
                 return new Type\Mixed($this);
 
             case self::CLONE:
-                return $this->expr->checkExpr($context);
+                return $this->expr->checkExpr($context, $noErrors);
 
             default:
                 throw new \Exception('Invalid unary operator type: ' . $this->type);
@@ -847,7 +847,7 @@ class Exit_ extends Expr {
         $this->expr = $expr;
     }
 
-    public function subStmts():array {
+    public function subStmts(bool $deep):array {
         return $this->expr ? [$this->expr] : [];
     }
 
@@ -856,7 +856,7 @@ class Exit_ extends Expr {
         return new \PhpParser\Node\Expr\Exit_($expr);
     }
 
-    public function checkExpr(Context\Context $context):Type\Type {
+    public function checkExpr(Context\Context $context, bool $noErrors):Type\Type {
         // "exit" is an expression??? How do you use the result?
         return Type\Type::none($this);
     }
@@ -875,7 +875,7 @@ class ShellExec extends Expr {
         $this->parts = $parts;
     }
 
-    public function subStmts():array {
+    public function subStmts(bool $deep):array {
         return $this->parts;
     }
 
@@ -883,7 +883,7 @@ class ShellExec extends Expr {
         return new \PhpParser\Node\Expr\ShellExec(ConcatMany::unparseEncaps($this->parts));
     }
 
-    public function checkExpr(Context\Context $context):Type\Type {
+    public function checkExpr(Context\Context $context, bool $noErrors):Type\Type {
         return new Type\String_($this);
     }
 }
@@ -917,7 +917,7 @@ class ClassName extends AbstractClassName {
         return $this->class;
     }
 
-    public function subStmts():array {
+    public function subStmts(bool $deep):array {
         return [];
     }
 
@@ -936,7 +936,7 @@ class ClassName extends AbstractClassName {
         return $this->class;
     }
 
-    public function checkExpr(Context\Context $context):Type\Type {
+    public function checkExpr(Context\Context $context, bool $noErrors):Type\Type {
         return new Type\SingleValue($this, $this->class);
     }
 }
@@ -959,7 +959,7 @@ class StaticClassName extends AbstractClassName {
         return $type;
     }
 
-    public function subStmts():array {
+    public function subStmts(bool $deep):array {
         return [];
     }
 
@@ -974,7 +974,7 @@ class StaticClassName extends AbstractClassName {
         return new \PhpParser\Node\Name('static');
     }
 
-    public function checkExpr(Context\Context $context):Type\Type {
+    public function checkExpr(Context\Context $context, bool $noErrors):Type\Type {
         return new Type\String_($this);
     }
 }

@@ -6,6 +6,7 @@ use JesseSchalken\PhpTypeChecker\Expr;
 use JesseSchalken\PhpTypeChecker\Parser;
 use JesseSchalken\PhpTypeChecker\Stmt;
 use JesseSchalken\PhpTypeChecker\Type;
+use JesseSchalken\PhpTypeChecker\Context;
 
 interface HasCodeLoc {
     public function loc():CodeLoc;
@@ -93,6 +94,11 @@ abstract class ErrorReceiver {
     }
 }
 
+class NullErrorReceiver extends ErrorReceiver {
+    public function add(string $message, HasCodeLoc $loc) {
+    }
+}
+
 class File extends Node {
     /**
      * @param string[]      $files
@@ -107,6 +113,7 @@ class File extends Node {
         $parsed  = [];
         $defined = new Parser\GlobalDefinedNames;
         $result  = [];
+        $context = new Context\Context($errors);
         foreach ($files as $path => $contents) {
             $file = new Parser\ParsedFile($path, $contents, $errors);
             $defined->addNodes($file->nodes);
@@ -116,7 +123,7 @@ class File extends Node {
             $self           = new self($file->nullLoc());
             $self->path     = $file->path;
             $self->shebang  = $file->shebang;
-            $self->contents = (new Parser\Parser($file, $defined, $errors))->parseStmts($self, $file->nodes);
+            $self->contents = (new Parser\Parser($file, $defined, clone $context))->parseStmts($self, $file->nodes);
             $result[]       = $self;
         }
         return $result;
@@ -188,11 +195,11 @@ class File extends Node {
     }
 
     /**
-     * @param Context\Context $decls
+     * @param Context\Context $context
      * @return void
      */
-    public function gatherGlobalDecls(Context\Context $decls) {
-        $this->contents->gatherGlobalDecls($decls);
+    public function gatherGlobalDecls(Context\Context $context) {
+        $this->contents->gatherGlobalDecls($context);
     }
 
     /**
@@ -200,6 +207,8 @@ class File extends Node {
      */
     public function typeCheck(Context\Context $context) {
         $context = $context->withoutLocals();
+        $context->setReturn(new Type\Mixed($this));
+
         $this->contents->gatherLocalDecls($context);
         $this->contents->checkStmt($context);
     }

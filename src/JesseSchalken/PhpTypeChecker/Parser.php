@@ -11,6 +11,7 @@ use JesseSchalken\PhpTypeChecker\ControlStructure;
 use JesseSchalken\PhpTypeChecker\Defns;
 use JesseSchalken\PhpTypeChecker\ErrorReceiver;
 use JesseSchalken\PhpTypeChecker\Expr;
+use JesseSchalken\PhpTypeChecker\Context;
 use JesseSchalken\PhpTypeChecker\Function_;
 use JesseSchalken\PhpTypeChecker\LValue;
 use JesseSchalken\PhpTypeChecker\Stmt;
@@ -348,13 +349,13 @@ final class Parser {
     private $parent;
     /** @var string|null */
     private $function;
-    /** @var ErrorReceiver */
-    private $errors;
+    /** @var Context\Context */
+    private $context;
 
-    public function __construct(ParsedFile $file, GlobalDefinedNames $globals, ErrorReceiver $errors) {
+    public function __construct(ParsedFile $file, GlobalDefinedNames $globals, Context\Context $context) {
         $this->globals   = $globals;
         $this->file      = $file;
-        $this->errors    = $errors;
+        $this->context   = $context;
         $this->namespace = new NamespaceContext(null, $globals);
     }
 
@@ -851,7 +852,7 @@ final class Parser {
             $union = new Type\Union($loc);
             for ($i = 0; $type->has($i); $i++) {
                 foreach ($this->parseDocTypeObject($loc, $type->get($i), $context) as $t) {
-                    $union = $union->addType($t, new Type\DummyTypeContext());
+                    $union = $union->addType($t, $this->context);
                 }
             }
             return $union;
@@ -868,10 +869,8 @@ final class Parser {
         }
     }
 
-    private function checkCompatible(Type\Type $sup, Type\Type $sub) {
-        if (!$sup->containsType($sub, new Type\DummyTypeContext())) {
-            $this->errors->add("Warning $sub is not compatible with $sup", $sup);
-        }
+    private function checkCompatible(HasCodeLoc $loc, Type\Type $sup, Type\Type $sub) {
+        $sup->checkContains($loc, $sub, $this->context);
     }
 
     private function parseFunctionType(\PhpParser\Node\FunctionLike $node):Function_\Function_ {
@@ -890,7 +889,7 @@ final class Parser {
             $default = $this->parseExprNull($param->default);
 
             if ($default && $default instanceof Constants\Literal && $default->value() === null) {
-                $type = $type->addType(new Type\SingleValue($default, null), new Type\DummyTypeContext());
+                $type = $type->addType(new Type\SingleValue($default, null), $this->context);
             }
 
             $paramDefaults[$name] = $default;
@@ -909,7 +908,7 @@ final class Parser {
                     $comment->getContext()
                 )
                 ) {
-                    $this->checkCompatible($returnType, $type);
+                    $this->checkCompatible($type, $returnType, $type);
                     $returnType = $type;
                 }
             }
@@ -925,25 +924,34 @@ final class Parser {
                     if (!isset($paramTypes[$name])) {
                         $paramTypes[$name] = new Type\Mixed($this->locateComment($comment));
                     }
-                    $this->checkCompatible($paramTypes[$name], $type);
+                    $this->checkCompatible($type, $paramTypes[$name], $type);
                     $paramTypes[$name] = $type;
                 }
             }
         }
 
-        $variadic = false;
-        $params   = [];
+        $varArg = null;
+        $warned = false;
+        $params = [];
         foreach ($node->getParams() as $param) {
-            $params[] = new Function_\Param(
+            $param_ = new Function_\Param(
                 $this->locateNode($param),
                 $param->name,
                 $paramTypes[$param->name],
                 $param->byRef,
                 $paramDefaults[$param->name]
             );
-            $variadic = $variadic || $param->variadic;
+            if ($param->variadic) {
+                $varArg = $param_;
+            } else {
+                if ($varArg && !$warned) {
+                    $this->context->addError("Only the last parameter can be variadic", $varArg);
+                    $warned = true;
+                }
+                $params[] = $param_;
+            }
         }
-        return new Function_\Function_($loc, $params, $returnType, $node->returnsByRef(), $variadic);
+        return new Function_\Function_($loc, $params, $returnType, $node->returnsByRef(), $varArg);
     }
 
     /**
@@ -1453,7 +1461,7 @@ final class Parser {
         foreach ($args as $arg) {
             $loc = $this->locateNode($arg);
             if ($arg->byRef) {
-                $this->errors->add("Call-time pass by reference is not supported", $loc);
+                $this->context->addError("Call-time pass by reference is not supported", $loc);
             }
             $result[] = new Call\CallArg($loc, $this->parseExpr($arg->value), $arg->unpack);
         }
