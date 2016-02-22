@@ -53,6 +53,15 @@ abstract class Expr extends Stmt\SingleStmt {
      * @return Type\Type
      */
     public abstract function checkExpr(Context\Context $context, bool $noErrors):Type\Type;
+
+    /**
+     * @param Type\Type       $type
+     * @param Context\Context $context
+     * @return array|Type\Type[]
+     */
+    public function inferLocal(Type\Type $type, Context\Context $context):array {
+        return [];
+    }
 }
 
 class Yield_ extends Expr {
@@ -580,6 +589,16 @@ class BinOp extends Expr {
 
             default:
                 throw new \Exception('Invalid binary operator type: ' . $this->type);
+        }
+    }
+
+    protected function inferLocals_(Context\Context $context):array {
+        switch ($this->type) {
+            case self::ASSIGN:
+            case self::ASSIGN_REF:
+                return $this->left->inferLocal($this->right->checkExpr($context, true), $context);
+            default:
+                return [];
         }
     }
 

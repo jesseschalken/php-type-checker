@@ -326,6 +326,23 @@ abstract class Type extends PhpTypeChecker\Node {
         $type = $context->addError("$this cannot be used in 'foreach' or ... (unpack).", $loc);
         return new ForeachResult($type, $type);
     }
+
+    /**
+     * @param Type            $type
+     * @param Context\Context $context
+     * @return Type[]
+     */
+    public function useToInferLocal(Type $type, Context\Context $context) {
+        return [];
+    }
+
+    /**
+     * @param Context\Context $context
+     * @return Type[]
+     */
+    public function useToInferGlobal(Context\Context $context):array {
+        return [];
+    }
 }
 
 class ForeachResult {
@@ -398,6 +415,28 @@ class Union extends Type {
                 $join = join('|', array_keys($parts));
                 return $atomic ? "($join)" : $join;
         }
+    }
+
+    public function call(HasCodeLoc $loc, Context\Context $context, array $args, bool $noErrors):Type {
+        return $this->map(function (Type $t) use ($loc, $context, $args, $noErrors) {
+            return $t->call($loc, $context, $args, $noErrors);
+        });
+    }
+
+    public function useToInferLocal(Type $type, Context\Context $context):array {
+        $types = [];
+        foreach ($this->types as $t) {
+            $types = merge_types($types, $t->useToInferLocal($type, $context), $context);
+        }
+        return $types;
+    }
+
+    public function useToInferGlobal(Context\Context $context):array {
+        $types = [];
+        foreach ($this->types as $t) {
+            $types = merge_types($types, $t->useToInferGlobal($context), $context);
+        }
+        return $types;
     }
 
     public function useAsVariableName(HasCodeLoc $loc, Context\Context $context):Type {
@@ -643,6 +682,14 @@ class TypeVar extends SingleType {
 
     public function toString(bool $atomic = false):string {
         return $this->var;
+    }
+
+    public function useToInferLocal(Type $type, Context\Context $context) {
+        return $this->type->useToInferLocal($type, $context);
+    }
+
+    public function useToInferGlobal(Context\Context $context):array {
+        return $this->type->useToInferGlobal($context);
     }
 
     public function useAsVariableName(HasCodeLoc $loc, Context\Context $context):Type {
@@ -932,6 +979,21 @@ class SingleValue extends SingleType {
             return $var;
         } else {
             return $context->addError("Undefined variable: $name", $loc);
+        }
+    }
+
+    public function useToInferLocal(Type $type, Context\Context $context) {
+        $name = (string)$this->value;
+        return [$name => $type];
+    }
+
+    public function useToInferGlobal(Context\Context $context):array {
+        $name = (string)$this->value;
+        $type = $context->getGlobal($name);
+        if ($type) {
+            return [$name => $type];
+        } else {
+            return [];
         }
     }
 }

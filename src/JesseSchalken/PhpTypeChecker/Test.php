@@ -87,7 +87,7 @@ needs_int($x);
 s
             ,
             <<<'s'
-TODO
+inference.php(5,11): true is incompatible with int
 s
         );
     }

@@ -11,6 +11,7 @@ use JesseSchalken\PhpTypeChecker\Expr;
 use JesseSchalken\PhpTypeChecker\Call;
 use function JesseSchalken\PhpTypeChecker\normalize_constant;
 use function JesseSchalken\PhpTypeChecker\str_ieq;
+use function JesseSchalken\PhpTypeChecker\merge_types;
 
 class Context {
     /** @var ErrorReceiver */
@@ -31,6 +32,8 @@ class Context {
     private $class = '';
     /** @var Type\Type */
     private $return;
+    /** @var Type\Type */
+    private $returnRef = false;
 
     public function __construct(ErrorReceiver $errors) {
         $this->errors = $errors;
@@ -39,6 +42,10 @@ class Context {
 
     public function setReturn(Type\Type $type) {
         $this->return = $type;
+    }
+
+    public function setReturnRef(bool $ref) {
+        $this->returnRef = $ref;
     }
 
     public function addGlobal(string $name, Type\Type $type) {
@@ -51,6 +58,10 @@ class Context {
 
     public function addConstant(string $name, Expr\Expr $expr) {
         $this->constants[normalize_constant($name)] = $expr;
+    }
+
+    public function hasLocal(string $name):bool {
+        return isset($this->locals[$name]);
     }
 
     public function hasGlobal(string $name):bool {
@@ -135,11 +146,12 @@ class Context {
         }
     }
 
-    public function withoutLocals():self {
-        $clone         = clone $this;
-        $clone->labels = [];
-        $clone->locals = [];
-        $clone->return = new Type\Mixed(new CodeLoc('', 1, 1));
+    public function withoutLocals(HasCodeLoc $loc):self {
+        $clone            = clone $this;
+        $clone->labels    = [];
+        $clone->locals    = [];
+        $clone->return    = new Type\Mixed($loc);
+        $clone->returnRef = false;
         return $clone;
     }
 
@@ -150,7 +162,9 @@ class Context {
     }
 
     public function addLocal(string $name, Type\Type $type) {
-        $this->locals[$name] = $type;
+        if (!$type->isEmpty()) {
+            $this->locals[$name] = $type;
+        }
     }
 
     public function addLabel(string $name) {
@@ -168,6 +182,13 @@ class Context {
     public function addError(string $message, HasCodeLoc $loc):Type\Type {
         $this->errors->add($message, $loc);
         return Type\Type::none($loc);
+    }
+
+    /**
+     * @return Type\Type[]
+     */
+    public function getLocals():array {
+        return $this->locals;
     }
 }
 

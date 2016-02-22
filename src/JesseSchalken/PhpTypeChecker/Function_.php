@@ -44,13 +44,19 @@ class Function_ extends Node {
         foreach ($this->params as $i => $param) {
             $type = $param->type();
             $name = $param->name();
-            if ($this->varArg && $i == count($this->params) - 1) {
-                $type = new Type\Array_($param, $type);
-            }
+            $context->addLocal($name, $type);
+        }
+
+        $varArg = $this->varArg;
+        if ($varArg) {
+            $name = $varArg->name();
+            $type = $varArg->type();
+            $type = new Type\Array_($varArg, $type);
             $context->addLocal($name, $type);
         }
 
         $context->setReturn($this->returnType);
+        $context->setReturnRef($this->returnRef);
     }
 
     public function subStmts():array {

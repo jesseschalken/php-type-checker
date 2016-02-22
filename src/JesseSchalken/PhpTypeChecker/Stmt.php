@@ -29,18 +29,42 @@ abstract class Stmt extends Node {
      */
     public abstract function subStmts(bool $deep):array;
 
+    public final function gatherInferedLocals(Context\Context $context) {
+        $declared = $context->getLocals();
+        do {
+            $added = false;
+            $types = $this->inferLocals($context);
+            foreach ($types as $name => $type) {
+                // Ignore variables that were already declared at the outset
+                if (isset($declared[$name])) {
+                    continue;
+                }
+                $type2 = $context->getLocal($name);
+                if (!$type2) {
+                    // Add the variable if it doesn't exist
+                    $context->addLocal($name, $type);
+                    $added = true;
+                } else if (!$type2->containsType($type, $context)) {
+                    // Merge it in if we have discovered new types for it
+                    $context->addLocal($name, $type->addType($type2, $context));
+                    $added = true;
+                }
+            }
+        } while ($added);
+    }
+
     /**
      * Infer local variables based on direct assignments of the form "$foo = ...". "$context" will already have local
      * variables based on explicit "@var" doc comments, and parameters.
      * @param Context\Context $context
      * @return Type\Type[]
      */
-    public final function inferLocals(Context\Context $context):array {
-        $res = [];
+    private function inferLocals(Context\Context $context):array {
+        $types = $this->inferLocals_($context);
         foreach ($this->subStmts(false) as $stmt) {
-            $res = merge_types($stmt->inferLocals($context), $res, $context);
+            $types = merge_types($stmt->inferLocals($context), $types, $context);
         }
-        return $res;
+        return $types;
     }
 
     /**
@@ -301,15 +325,22 @@ class StaticVar extends SingleStmt {
         return $this->value ? [$this->value] : [];
     }
 
+    protected function inferLocals_(Context\Context $context):array {
+        $value = $this->value;
+        if ($value) {
+            return [$this->name => $value->checkExpr($context, true)];
+        } else {
+            return [];
+        }
+    }
+
     public function unparseStmt() {
-        return new \PhpParser\Node\Stmt\Static_(
-            [
-                new \PhpParser\Node\Stmt\StaticVar(
-                    $this->name,
-                    $this->value ? $this->value->unparseExpr() : null
-                ),
-            ]
-        );
+        return new \PhpParser\Node\Stmt\Static_([
+            new \PhpParser\Node\Stmt\StaticVar(
+                $this->name,
+                $this->value ? $this->value->unparseExpr() : null
+            ),
+        ]);
     }
 }
 
@@ -410,6 +441,10 @@ class Global_ extends SingleStmt {
         return new \PhpParser\Node\Stmt\Global_([
             $this->expr->unparseExpr(),
         ]);
+    }
+
+    protected function inferLocals_(Context\Context $context):array {
+        return $this->expr->checkExpr($context, true)->useToInferGlobal($context);
     }
 }
 

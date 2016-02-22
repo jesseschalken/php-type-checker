@@ -35,6 +35,10 @@ class Variable extends LValue {
     public function checkExpr(Context\Context $context, bool $noErrors):Type\Type {
         return $this->name->checkExpr($context, $noErrors)->useAsVariableName($this, $context);
     }
+
+    public function inferLocal(Type\Type $type, Context\Context $context):array {
+        return $this->name->checkExpr($context, true)->useToInferLocal($type, $context);
+    }
 }
 
 class SuperGlobal extends \JesseSchalken\Enum\StringEnum {

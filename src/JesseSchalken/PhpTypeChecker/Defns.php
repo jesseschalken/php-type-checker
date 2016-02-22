@@ -186,8 +186,10 @@ class FunctionDefinition extends GlobalDefinition implements HasNamespace {
     }
 
     public function checkStmt(Context\Context $context) {
-        $context = $context->withoutLocals();
+        $context = $context->withoutLocals($this);
         $this->type->addLocals($context);
+        $this->body->gatherLocalDecls($context);
+        $this->body->gatherInferedLocals($context);
         $this->body->checkStmt($context);
     }
 }

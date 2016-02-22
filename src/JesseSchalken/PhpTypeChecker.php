@@ -206,10 +206,9 @@ class File extends Node {
      * @param Context\Context $context
      */
     public function typeCheck(Context\Context $context) {
-        $context = $context->withoutLocals();
-        $context->setReturn(new Type\Mixed($this));
-
+        $context = $context->withoutLocals($this);
         $this->contents->gatherLocalDecls($context);
+        $this->contents->gatherInferedLocals($context);
         $this->contents->checkStmt($context);
     }
 }
