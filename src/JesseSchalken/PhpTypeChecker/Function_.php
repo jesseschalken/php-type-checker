@@ -214,6 +214,7 @@ class Function_ extends Node {
                 $context->addError("Excess parameter #" . ($i + 1), $arg);
             }
         }
+        $i++;
 
         // Splat mode
         // Check all remaining arguments against all remaining parameters
