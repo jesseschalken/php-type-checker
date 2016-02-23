@@ -37,7 +37,11 @@ class Variable extends LValue {
     }
 
     public function inferLocal(Type\Type $type, Context\Context $context):array {
-        return $this->name->checkExpr($context, true)->useToInferLocal($type, $context);
+        $locals = [];
+        foreach ($this->name->checkExpr($context, true)->getStringValues($context) as $string) {
+            $locals[$string] = $type;
+        }
+        return $locals;
     }
 }
 

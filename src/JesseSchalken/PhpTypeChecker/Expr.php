@@ -8,6 +8,7 @@ use JesseSchalken\PhpTypeChecker\HasCodeLoc;
 use JesseSchalken\PhpTypeChecker\Node;
 use JesseSchalken\PhpTypeChecker\Stmt;
 use JesseSchalken\PhpTypeChecker\Type;
+use function JesseSchalken\PhpTypeChecker\merge_types;
 
 abstract class Expr extends Stmt\SingleStmt {
     public function isLValue():bool {
@@ -208,9 +209,9 @@ class ArrayItem extends Node {
         $key = $this->key;
         $val = $this->value->checkExpr($context, $noErrors);
         if ($key) {
-            return $key->checkExpr($context, $noErrors)->useToSetArrayKey($this, $context, $array, $val);
+            return $key->checkExpr($context, $noErrors)->useToSetArrayKey($this, $context, $array, $val, $noErrors);
         } else {
-            return $array->addArrayKey($this, $context, $val);
+            return $array->addArrayKey($this, $context, $val, $noErrors);
         }
     }
 
@@ -592,13 +593,14 @@ class BinOp extends Expr {
         }
     }
 
-    protected function inferLocals_(Context\Context $context):array {
+    protected function inferLocals(Context\Context $context):array {
+        $locals = parent::inferLocals($context);
         switch ($this->type) {
             case self::ASSIGN:
             case self::ASSIGN_REF:
-                return $this->left->inferLocal($this->right->checkExpr($context, true), $context);
+                return merge_types($locals, $this->left->inferLocal($this->right->checkExpr($context, true), $context), $context);
             default:
-                return [];
+                return $locals;
         }
     }
 

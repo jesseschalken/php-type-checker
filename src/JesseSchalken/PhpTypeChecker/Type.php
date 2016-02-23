@@ -3,7 +3,6 @@
 namespace JesseSchalken\PhpTypeChecker\Type;
 
 use JesseSchalken\PhpTypeChecker;
-use JesseSchalken\PhpTypeChecker\ErrorReceiver;
 use JesseSchalken\PhpTypeChecker\Expr;
 use JesseSchalken\PhpTypeChecker\Function_;
 use JesseSchalken\PhpTypeChecker\Call;
@@ -191,28 +190,20 @@ abstract class Type extends PhpTypeChecker\Node {
         return false;
     }
 
-    /**
-     * @param Context\Context $ctx
-     * @param ErrorReceiver   $errors
-     * @return string[] All the possible strings that would result from casting this to string. Strings can be "null"
-     *                  when it is unknown what the result of casting to a string will be (which will be the case for
-     *                  everything except SingleValue).
-     */
-    public function asString(Context\Context $ctx, ErrorReceiver $errors) {
-        // By defualt, a type is not allowed to be cast to a string
-        $errors->add("Cannot cast {$this->toString()} to string", $this);
-        return [null];
+    public function getKnownArrayKey(string $key, HasCodeLoc $loc, Context\Context $context, bool $noErrors):Type {
+        return $this->getUnknownArrayKey($loc, $context, $noErrors);
     }
 
-    /**
-     * @param ErrorReceiver $errors
-     * @return string[] All the possible strings that would result from using this as an array key. Strings can be
-     *                  "null" if it is unknown what key would be used when this type is used as an array key.
-     */
-    public function asArrayKey(ErrorReceiver $errors) {
-        // By default, a type is not allowed to be used as an array key
-        $errors->add("Cannot use {$this->toString()} as array key", $this);
-        return [null];
+    public function getUnknownArrayKey(HasCodeLoc $loc, Context\Context $context, bool $noErrors):Type {
+        return $context->addError("Cannot use {$this->toString()} as array", $loc);
+    }
+
+    public function useAsArrayKey(HasCodeLoc $loc, Type $array, Context\Context $context, bool $noErrors):Type {
+        if (!$noErrors) {
+            // By default, a type is not allowed to be used as an array key
+            $context->addError("Cannot use {$this->toString()} as array key", $loc);
+        }
+        return $array->getUnknownArrayKey($loc, $context, $noErrors);
     }
 
     public function isCallable(Context\Context $ctx):bool {
@@ -284,18 +275,24 @@ abstract class Type extends PhpTypeChecker\Node {
         return false;
     }
 
-    public function addArrayKey(HasCodeLoc $loc, Context\Context $context, Type $type):Type {
-        $context->addError("Cannot use $this as array", $loc);
+    public function addArrayKey(HasCodeLoc $loc, Context\Context $context, Type $type, bool $noErrors):Type {
+        if (!$noErrors) {
+            $context->addError("Cannot use $this as array", $loc);
+        }
         return $this;
     }
 
-    public function setArrayKey(HasCodeLoc $loc, Context\Context $context, string $key, Type $type):Type {
-        $context->addError("Cannot use $this as array", $loc);
+    public function setArrayKey(HasCodeLoc $loc, Context\Context $context, string $key, Type $type, bool $noErrors):Type {
+        if (!$noErrors) {
+            $context->addError("Cannot use $this as array", $loc);
+        }
         return $this;
     }
 
-    public function useToSetArrayKey(HasCodeLoc $loc, Context\Context $context, Type $array, Type $value):Type {
-        $context->addError("Cannot use $this as array key", $loc);
+    public function useToSetArrayKey(HasCodeLoc $loc, Context\Context $context, Type $array, Type $value, bool $noErrors):Type {
+        if (!$noErrors) {
+            $context->addError("Cannot use $this as array key", $loc);
+        }
         return $array;
     }
 
@@ -328,19 +325,10 @@ abstract class Type extends PhpTypeChecker\Node {
     }
 
     /**
-     * @param Type            $type
      * @param Context\Context $context
-     * @return Type[]
+     * @return string[]
      */
-    public function useToInferLocal(Type $type, Context\Context $context) {
-        return [];
-    }
-
-    /**
-     * @param Context\Context $context
-     * @return Type[]
-     */
-    public function useToInferGlobal(Context\Context $context):array {
+    public function getStringValues(Context\Context $context):array {
         return [];
     }
 }
@@ -423,20 +411,14 @@ class Union extends Type {
         });
     }
 
-    public function useToInferLocal(Type $type, Context\Context $context):array {
-        $types = [];
+    public function getStringValues(Context\Context $context):array {
+        $strings = [];
         foreach ($this->types as $t) {
-            $types = merge_types($types, $t->useToInferLocal($type, $context), $context);
+            foreach ($t->getStringValues($context) as $string) {
+                $strings[] = $string;
+            }
         }
-        return $types;
-    }
-
-    public function useToInferGlobal(Context\Context $context):array {
-        $types = [];
-        foreach ($this->types as $t) {
-            $types = merge_types($types, $t->useToInferGlobal($context), $context);
-        }
-        return $types;
+        return $strings;
     }
 
     public function useAsVariableName(HasCodeLoc $loc, Context\Context $context):Type {
@@ -445,21 +427,21 @@ class Union extends Type {
         });
     }
 
-    public function useToSetArrayKey(HasCodeLoc $loc, Context\Context $context, Type $array, Type $value):Type {
-        return $this->map(function (Type $t) use ($loc, $context, $array, $value) {
-            return $t->useToSetArrayKey($loc, $context, $array, $value);
+    public function useToSetArrayKey(HasCodeLoc $loc, Context\Context $context, Type $array, Type $value, bool $noErrors):Type {
+        return $this->map(function (Type $t) use ($loc, $context, $array, $value, $noErrors) {
+            return $t->useToSetArrayKey($loc, $context, $array, $value, $noErrors);
         });
     }
 
-    public function addArrayKey(HasCodeLoc $loc, Context\Context $context, Type $type):Type {
-        return $this->map(function (Type $t) use ($loc, $context, $type) {
-            return $t->addArrayKey($loc, $context, $type);
+    public function addArrayKey(HasCodeLoc $loc, Context\Context $context, Type $type, bool $noErrors):Type {
+        return $this->map(function (Type $t) use ($loc, $context, $type, $noErrors) {
+            return $t->addArrayKey($loc, $context, $type, $noErrors);
         });
     }
 
-    public function setArrayKey(HasCodeLoc $loc, Context\Context $context, string $key, Type $type):Type {
-        return $this->map(function (Type $t) use ($loc, $context, $key, $type) {
-            return $t->setArrayKey($loc, $context, $key, $type);
+    public function setArrayKey(HasCodeLoc $loc, Context\Context $context, string $key, Type $type, bool $noErrors):Type {
+        return $this->map(function (Type $t) use ($loc, $context, $key, $type, $noErrors) {
+            return $t->setArrayKey($loc, $context, $key, $type, $noErrors);
         });
     }
 
@@ -481,24 +463,10 @@ class Union extends Type {
         });
     }
 
-    public function asString(Context\Context $ctx, ErrorReceiver $errors):array {
-        $strings = [];
-        foreach ($this->types as $t) {
-            foreach ($t->asString($ctx, $errors) as $string) {
-                $strings[] = $string;
-            }
-        }
-        return $strings;
-    }
-
-    public function asArrayKey(ErrorReceiver $errors):array {
-        $keys = [];
-        foreach ($this->types as $t) {
-            foreach ($t->asArrayKey($errors) as $key) {
-                $keys[] = $key;
-            }
-        }
-        return $keys;
+    public function useAsArrayKey(HasCodeLoc $loc, Type $array, Context\Context $context, bool $noErrors):Type {
+        return $this->map(function (Type $t) use ($loc, $array, $context, $noErrors) {
+            return $t->useAsArrayKey($loc, $array, $context, $noErrors);
+        });
     }
 
     public function isExactlyMixed():bool {
@@ -523,6 +491,18 @@ class Union extends Type {
             $result->val = $result->val->addType($foreach->val, $context);
         }
         return $result;
+    }
+
+    public function getKnownArrayKey(string $key, HasCodeLoc $loc, Context\Context $context, bool $noErrors):Type {
+        return $this->map(function (Type $t) use ($key, $loc, $context, $noErrors) {
+            return $t->getKnownArrayKey($key, $loc, $context, $noErrors);
+        });
+    }
+
+    public function getUnknownArrayKey(HasCodeLoc $loc, Context\Context $context, bool $noErrors):Type {
+        return $this->map(function (Type $t) use ($loc, $context, $noErrors) {
+            return $t->getUnknownArrayKey($loc, $context, $noErrors);
+        });
     }
 
     public function isSingleValue($value):bool {
@@ -684,20 +664,24 @@ class TypeVar extends SingleType {
         return $this->var;
     }
 
-    public function useToInferLocal(Type $type, Context\Context $context) {
-        return $this->type->useToInferLocal($type, $context);
+    public function getKnownArrayKey(string $key, HasCodeLoc $loc, Context\Context $context, bool $noErrors):Type {
+        return $this->type->getKnownArrayKey($key, $loc, $context, $noErrors);
     }
 
-    public function useToInferGlobal(Context\Context $context):array {
-        return $this->type->useToInferGlobal($context);
+    public function getUnknownArrayKey(HasCodeLoc $loc, Context\Context $context, bool $noErrors):Type {
+        return $this->type->getUnknownArrayKey($loc, $context, $noErrors);
+    }
+
+    public function getStringValues(Context\Context $context):array {
+        return $this->type->getStringValues($context);
     }
 
     public function useAsVariableName(HasCodeLoc $loc, Context\Context $context):Type {
         return $this->type->useAsVariableName($loc, $context);
     }
 
-    public function useToSetArrayKey(HasCodeLoc $loc, Context\Context $context, Type $array, Type $value):Type {
-        return $this->type->useToSetArrayKey($loc, $context, $array, $value);
+    public function useToSetArrayKey(HasCodeLoc $loc, Context\Context $context, Type $array, Type $value, bool $noErrors):Type {
+        return $this->type->useToSetArrayKey($loc, $context, $array, $value, $noErrors);
     }
 
     public function call(HasCodeLoc $loc, Context\Context $context, array $args, bool $noErrors):Type {
@@ -724,20 +708,20 @@ class TypeVar extends SingleType {
         return $this->var === $var;
     }
 
-    public function addArrayKey(HasCodeLoc $loc, Context\Context $context, Type $type):Type {
-        return $this->type->addArrayKey($loc, $context, $type);
+    public function addArrayKey(HasCodeLoc $loc, Context\Context $context, Type $type, bool $noErrors):Type {
+        return $this->type->addArrayKey($loc, $context, $type, $noErrors);
     }
 
-    public function setArrayKey(HasCodeLoc $loc, Context\Context $context, string $key, Type $type):Type {
-        return $this->type->setArrayKey($loc, $context, $key, $type);
+    public function setArrayKey(HasCodeLoc $loc, Context\Context $context, string $key, Type $type, bool $noErrors):Type {
+        return $this->type->setArrayKey($loc, $context, $key, $type, $noErrors);
     }
 
     public function doForeach(HasCodeLoc $loc, Context\Context $context):ForeachResult {
         return $this->type->doForeach($loc, $context);
     }
 
-    public function asArrayKey(ErrorReceiver $errors):array {
-        return $this->type->asArrayKey($errors);
+    public function useAsArrayKey(HasCodeLoc $loc, Type $array, Context\Context $context, bool $noErrors):Type {
+        return $this->type->useAsArrayKey($loc, $array, $context, $noErrors);
     }
 
     public function isCallable(Context\Context $ctx):bool {
@@ -798,10 +782,6 @@ class TypeVar extends SingleType {
 
     public function hasCallableMethod(string $method, Context\Context $ctx):bool {
         return $this->type->hasCallableMethod($method, $ctx);
-    }
-
-    public function asString(Context\Context $ctx, ErrorReceiver $errors):array {
-        return $this->type->asString($ctx, $errors);
     }
 }
 
@@ -923,11 +903,7 @@ class SingleValue extends SingleType {
         }
     }
 
-    public function asString(Context\Context $ctx, ErrorReceiver $errors):array {
-        return ["$this->value"];
-    }
-
-    public function asArrayKey(ErrorReceiver $errors):array {
+    public function useAsArrayKey(HasCodeLoc $loc, Type $array, Context\Context $context, bool $noErrors):Type {
         $value = $this->value;
         switch (true) {
             case is_float($value);
@@ -937,18 +913,18 @@ class SingleValue extends SingleType {
             case is_string($value):
             case is_int($value):
             case is_null($value):
-                return ["$value"];
+                return $array->getKnownArrayKey((string)$value, $loc, $context, $noErrors);
             default:
-                return parent::asArrayKey($errors);
+                return parent::useAsArrayKey($loc, $array, $context, $noErrors);
         }
     }
 
-    public function useToSetArrayKey(HasCodeLoc $loc, Context\Context $context, Type $array, Type $value):Type {
+    public function useToSetArrayKey(HasCodeLoc $loc, Context\Context $context, Type $array, Type $value, bool $noErrors):Type {
         $val = $this->value;
         if (is_bool($val) || is_float($val)) {
             $val = (int)$val;
         }
-        return $array->setArrayKey($loc, $context, (string)$val, $value);
+        return $array->setArrayKey($loc, $context, (string)$val, $value, $noErrors);
     }
 
     public function isFalsy():bool {
@@ -975,26 +951,15 @@ class SingleValue extends SingleType {
     public function useAsVariableName(HasCodeLoc $loc, Context\Context $context):Type {
         $name = (string)$this->value;
         $var  = $context->getLocal($name);
-        if ($var) {
+        if ($var && !$var->isEmpty()) {
             return $var;
         } else {
             return $context->addError("Undefined variable: $name", $loc);
         }
     }
 
-    public function useToInferLocal(Type $type, Context\Context $context) {
-        $name = (string)$this->value;
-        return [$name => $type];
-    }
-
-    public function useToInferGlobal(Context\Context $context):array {
-        $name = (string)$this->value;
-        $type = $context->getGlobal($name);
-        if ($type) {
-            return [$name => $type];
-        } else {
-            return [];
-        }
+    public function getStringValues(Context\Context $context):array {
+        return [(string)$this->value];
     }
 }
 
@@ -1039,7 +1004,7 @@ class Callable_ extends SingleType {
      */
     public function call(HasCodeLoc $loc, Context\Context $context, array $args, bool $noErrors):Type {
         // We don't know what the function signature is going to be, so just return mixed
-        return new Mixed($this);
+        return new Mixed($loc);
     }
 }
 
@@ -1056,12 +1021,8 @@ class Float_ extends SingleType {
         return $type->isFloat();
     }
 
-    public function asString(Context\Context $ctx, ErrorReceiver $errors) {
-        return [null];
-    }
-
-    public function asArrayKey(ErrorReceiver $errors) {
-        return [null];
+    public function useAsArrayKey(HasCodeLoc $loc, Type $array, Context\Context $context, bool $noErrors):Type {
+        return $array->getUnknownArrayKey($loc, $context, $noErrors);
     }
 }
 
@@ -1082,12 +1043,8 @@ class String_ extends SingleType {
         return $type->isString();
     }
 
-    public function asString(Context\Context $ctx, ErrorReceiver $errors) {
-        return [null];
-    }
-
-    public function asArrayKey(ErrorReceiver $errors) {
-        return [null];
+    public function useAsArrayKey(HasCodeLoc $loc, Type $array, Context\Context $context, bool $noErrors):Type {
+        return $array->getUnknownArrayKey($loc, $context, $noErrors);
     }
 }
 
@@ -1108,12 +1065,8 @@ class Int_ extends SingleType {
         return $type->isInt();
     }
 
-    public function asString(Context\Context $ctx, ErrorReceiver $errors) {
-        return [null];
-    }
-
-    public function asArrayKey(ErrorReceiver $errors) {
-        return [null];
+    public function useAsArrayKey(HasCodeLoc $loc, Type $array, Context\Context $context, bool $noErrors):Type {
+        return $array->getUnknownArrayKey($loc, $context, $noErrors);
     }
 }
 
@@ -1148,12 +1101,9 @@ class Resource extends SingleType {
         return $type->isResource();
     }
 
-    public function asString(Context\Context $ctx, ErrorReceiver $errors) {
-        return [null];
-    }
-
-    public function asArrayKey(ErrorReceiver $errors) {
-        return [null];
+    public function useAsArrayKey(HasCodeLoc $loc, Type $array, Context\Context $context, bool $noErrors):Type {
+        // Apparently you can use resoureces as array keys. Who knew?
+        return $array->getUnknownArrayKey($loc, $context, $noErrors);
     }
 }
 
@@ -1189,12 +1139,9 @@ class Class_ extends SingleType {
         return $ctx->methodExists($this->class, $method, false);
     }
 
-    public function asString(Context\Context $ctx, ErrorReceiver $errors) {
-        if ($ctx->methodExists($this->class, '__toString', false)) {
-            return [null];
-        } else {
-            return parent::asString($ctx, $errors);
-        }
+    public function getStringValues(Context\Context $context):array {
+        // TODO use __toString() if defined on $this->class
+        return parent::getStringValues($context);
     }
 }
 
@@ -1209,6 +1156,10 @@ class Array_ extends SingleType {
 
     public function toTypeHint() {
         return 'array';
+    }
+
+    public function getUnknownArrayKey(HasCodeLoc $loc, Context\Context $context, bool $noErrors):Type {
+        return $this->inner;
     }
 
     public function toString(bool $atomic = false):string {
@@ -1227,12 +1178,12 @@ class Array_ extends SingleType {
         return $type->isArrayOf($this->inner, $ctx);
     }
 
-    public function addArrayKey(HasCodeLoc $loc, Context\Context $context, Type $type):Type {
+    public function addArrayKey(HasCodeLoc $loc, Context\Context $context, Type $type, bool $noErrors):Type {
         return new self($this, $this->inner->addType($type, $context));
     }
 
-    public function setArrayKey(HasCodeLoc $loc, Context\Context $context, string $key, Type $type):Type {
-        return $this->addArrayKey($loc, $context, $type);
+    public function setArrayKey(HasCodeLoc $loc, Context\Context $context, string $key, Type $type, bool $noErrors):Type {
+        return $this->addArrayKey($loc, $context, $type, $noErrors);
     }
 
     public function doForeach(HasCodeLoc $loc, Context\Context $context):ForeachResult {
@@ -1261,8 +1212,12 @@ class Shape extends SingleType {
         $this->keys = $keys;
     }
 
-    public function get(HasCodeLoc $loc, string $key, Context\Context $context):Type {
+    public function getKnownArrayKey(string $key, HasCodeLoc $loc, Context\Context $context, bool $noErrors):Type {
         return $this->keys[$key] ?? $context->addError("Undefined key '$key'", $loc);
+    }
+
+    public function getUnknownArrayKey(HasCodeLoc $loc, Context\Context $context, bool $noErrors):Type {
+        return $this->all($context);
     }
 
     public function merge(Context\Context $context, self $that):self {
@@ -1309,11 +1264,11 @@ class Shape extends SingleType {
         return $type->containsType($this->all($ctx), $ctx);
     }
 
-    public function addArrayKey(HasCodeLoc $loc, Context\Context $context, Type $type):Type {
-        return (new Array_($this, $this->all($context)))->addArrayKey($loc, $context, $type);
+    public function addArrayKey(HasCodeLoc $loc, Context\Context $context, Type $type, bool $noErrors):Type {
+        return (new Array_($this, $this->all($context)))->addArrayKey($loc, $context, $type, $noErrors);
     }
 
-    public function setArrayKey(HasCodeLoc $loc, Context\Context $context, string $key, Type $type):Type {
+    public function setArrayKey(HasCodeLoc $loc, Context\Context $context, string $key, Type $type, bool $noErrors):Type {
         $keys       = $this->keys;
         $keys[$key] = $type;
         return new self($this, $keys);

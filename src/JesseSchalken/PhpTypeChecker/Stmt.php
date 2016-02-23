@@ -59,20 +59,12 @@ abstract class Stmt extends Node {
      * @param Context\Context $context
      * @return Type\Type[]
      */
-    private function inferLocals(Context\Context $context):array {
-        $types = $this->inferLocals_($context);
+    protected function inferLocals(Context\Context $context):array {
+        $types = [];
         foreach ($this->subStmts(false) as $stmt) {
             $types = merge_types($stmt->inferLocals($context), $types, $context);
         }
         return $types;
-    }
-
-    /**
-     * @param Context\Context $context
-     * @return Type\Type[]
-     */
-    protected function inferLocals_(Context\Context $context):array {
-        return [];
     }
 
     public final function namespaces():array {
@@ -325,12 +317,13 @@ class StaticVar extends SingleStmt {
         return $this->value ? [$this->value] : [];
     }
 
-    protected function inferLocals_(Context\Context $context):array {
-        $value = $this->value;
+    protected function inferLocals(Context\Context $context):array {
+        $locals = parent::inferLocals($context);
+        $value  = $this->value;
         if ($value) {
-            return [$this->name => $value->checkExpr($context, true)];
+            return merge_types($locals, [$this->name => $value->checkExpr($context, true)], $context);
         } else {
-            return [];
+            return $locals;
         }
     }
 
@@ -443,8 +436,15 @@ class Global_ extends SingleStmt {
         ]);
     }
 
-    protected function inferLocals_(Context\Context $context):array {
-        return $this->expr->checkExpr($context, true)->useToInferGlobal($context);
+    protected function inferLocals(Context\Context $context):array {
+        $locals = [];
+        foreach ($this->expr->checkExpr($context, false)->getStringValues($context) as $string) {
+            $global = $context->getGlobal($string);
+            if ($global && !$global->isEmpty()) {
+                $locals[$string] = $global;
+            }
+        }
+        return merge_types(parent::inferLocals($context), $locals, $context);
     }
 }
 
