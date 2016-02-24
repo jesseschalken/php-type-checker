@@ -419,8 +419,24 @@ class Isset_ extends Expr {
     }
 }
 
-class BinOp extends Expr {
-    // Arithmetic
+abstract class AbstractBinOp extends Expr {
+    /** @var Expr */
+    protected $left;
+    /** @var Expr */
+    protected $right;
+
+    public function __construct(HasCodeLoc $loc, Expr $left, Expr $right) {
+        parent::__construct($loc);
+        $this->left  = $left;
+        $this->right = $right;
+    }
+
+    public function subStmts(bool $deep):array {
+        return [$this->left, $this->right];
+    }
+}
+
+class BinOpType extends \JesseSchalken\Enum\StringEnum {
     const ADD      = '+';
     const SUBTRACT = '-';
     const MULTIPLY = '*';
@@ -428,14 +444,275 @@ class BinOp extends Expr {
     const MODULUS  = '%';
     const EXPONENT = '**';
 
-    // Bitwise
     const BIT_AND     = '&';
     const BIT_OR      = '|';
     const BIT_XOR     = '^';
     const SHIFT_LEFT  = '<<';
     const SHIFT_RIGHT = '>>';
 
-    // Comparison
+    const CONCAT = '.';
+
+    public static function values() {
+        return [
+            self::ADD,
+            self::SUBTRACT,
+            self::MULTIPLY,
+            self::DIVIDE,
+            self::MODULUS,
+            self::EXPONENT,
+            self::BIT_AND,
+            self::BIT_OR,
+            self::BIT_XOR,
+            self::SHIFT_LEFT,
+            self::SHIFT_RIGHT,
+            self::CONCAT,
+        ];
+    }
+
+    public function __toString() {
+        return $this->value();
+    }
+
+    public function evaluate($lhs, $rhs) {
+        switch ($this->value()) {
+            case self::ADD:
+                return $lhs + $rhs;
+            case self::SUBTRACT:
+                return $lhs - $rhs;
+            case self::MULTIPLY:
+                return $lhs * $rhs;
+            case self::DIVIDE:
+                return $lhs / $rhs;
+            case self::MODULUS:
+                return $lhs % $rhs;
+            case self::EXPONENT:
+                return $lhs ** $rhs;
+            case self::BIT_AND:
+                return $lhs & $rhs;
+            case self::BIT_OR:
+                return $lhs | $rhs;
+            case self::BIT_XOR:
+                return $lhs ^ $rhs;
+            case self::SHIFT_LEFT:
+                return $lhs << $rhs;
+            case self::SHIFT_RIGHT:
+                return $lhs >> $rhs;
+            case self::CONCAT:
+                return $lhs . $rhs;
+            default:
+                throw new \Exception("Invalid binary op: $this");
+        }
+    }
+}
+
+class LogicalOpType extends \JesseSchalken\Enum\StringEnum {
+    const BOOl_AND  = '&&';
+    const BOOl_OR   = '||';
+    const LOGIC_AND = 'and';
+    const LOGIC_OR  = 'or';
+    const LOGIC_XOR = 'xor';
+
+    public static function values() {
+        return [
+            self::BOOl_AND,
+            self::BOOl_OR,
+            self::LOGIC_AND,
+            self::LOGIC_OR,
+            self::LOGIC_XOR,
+        ];
+    }
+
+    public function __toString() {
+        return $this->value();
+    }
+}
+
+class AssignOp extends AbstractBinOp {
+    /** @var BinOpType */
+    private $type;
+
+    public function __construct(HasCodeLoc $loc, Expr $right, BinOpType $type, Expr $left) {
+        parent::__construct($loc, $left, $right);
+        $this->type = $type;
+    }
+
+    public function unparseExpr():\PhpParser\Node\Expr {
+        $left  = $this->left->unparseExpr();
+        $right = $this->right->unparseExpr();
+        switch ($this->type->value()) {
+            case BinOpType::ADD:
+                return new \PhpParser\Node\Expr\AssignOp\Plus($left, $right);
+            case BinOpType::SUBTRACT:
+                return new \PhpParser\Node\Expr\AssignOp\Minus($left, $right);
+            case BinOpType::MULTIPLY:
+                return new \PhpParser\Node\Expr\AssignOp\Mul($left, $right);
+            case BinOpType::DIVIDE:
+                return new \PhpParser\Node\Expr\AssignOp\Div($left, $right);
+            case BinOpType::MODULUS:
+                return new \PhpParser\Node\Expr\AssignOp\Mod($left, $right);
+            case BinOpType::EXPONENT:
+                return new \PhpParser\Node\Expr\AssignOp\Pow($left, $right);
+            case BinOpType::CONCAT:
+                return new \PhpParser\Node\Expr\AssignOp\Concat($left, $right);
+            case BinOpType::BIT_AND:
+                return new \PhpParser\Node\Expr\AssignOp\BitwiseAnd($left, $right);
+            case BinOpType::BIT_OR:
+                return new \PhpParser\Node\Expr\AssignOp\BitwiseOr($left, $right);
+            case BinOpType::BIT_XOR:
+                return new \PhpParser\Node\Expr\AssignOp\BitwiseXor($left, $right);
+            case BinOpType::SHIFT_LEFT:
+                return new \PhpParser\Node\Expr\AssignOp\ShiftLeft($left, $right);
+            case BinOpType::SHIFT_RIGHT:
+                return new \PhpParser\Node\Expr\AssignOp\ShiftRight($left, $right);
+            default:
+                throw new \Exception('Invalid binary operator type: ' . $this->type->value());
+        }
+    }
+
+    public function checkExpr(Context\Context $context, bool $noErrors):Type\Type {
+        $lhs = $this->left->checkExpr($context, $noErrors);
+        $rhs = $this->right->checkExpr($context, $noErrors);
+        $val = $lhs->doBinOp($this, $rhs, $this->type, $context, $noErrors);
+        if (!$noErrors) {
+            $lhs->checkContains($this, $val, $context);
+        }
+        // The result of an assignment operation is the value assigned back to the LHS
+        return $val;
+    }
+}
+
+class Assign extends Expr {
+    /** @var Expr */
+    private $left;
+    /** @var Expr */
+    private $right;
+    /** @var bool */
+    private $byRef;
+
+    public function __construct(HasCodeLoc $loc, Expr $left, Expr $right, $byRef) {
+        parent::__construct($loc);
+        $this->left  = $left;
+        $this->right = $right;
+        $this->byRef = $byRef;
+    }
+
+    public function unparseExpr():\PhpParser\Node\Expr {
+        $left  = $this->left->unparseExpr();
+        $right = $this->right->unparseExpr();
+        if ($this->byRef) {
+            return new \PhpParser\Node\Expr\AssignRef($left, $right);
+        } else {
+            return new \PhpParser\Node\Expr\Assign($left, $right);
+        }
+    }
+
+    public function checkExpr(Context\Context $context, bool $noErrors):Type\Type {
+        $right = $this->right->checkExpr($context, $noErrors);
+        if (!$noErrors) {
+            $left = $this->left->checkExpr($context, $noErrors);
+            if ($this->byRef) {
+                $left->checkEquivelant($this, $right, $context);
+            } else {
+                $left->checkContains($this, $right, $context);
+            }
+        }
+        return $right;
+    }
+
+    protected function inferLocals(Context\Context $context):array {
+        return merge_types(
+            parent::inferLocals($context),
+            $this->left->inferLocal($this->right->checkExpr($context, true), $context),
+            $context
+        );
+    }
+
+    public function subStmts(bool $deep):array {
+        return [$this->left, $this->right];
+    }
+}
+
+class InstanceOf_ extends AbstractBinOp {
+    public function unparseExpr():\PhpParser\Node\Expr {
+        return new \PhpParser\Node\Expr\Instanceof_(
+            $this->left->unparseExpr(),
+            $this->right->unparseExprOrName()
+        );
+    }
+
+    public function checkExpr(Context\Context $context, bool $noErrors):Type\Type {
+        // TODO do some actual checking
+        // TODO maybe return "true" or "false" single values if the LHS is known to be/not to be an instanceof RHS
+        return Type\Type::bool($this);
+    }
+}
+
+class LogicalOp extends AbstractBinOp {
+    private $type;
+
+    public function __construct(HasCodeLoc $loc, Expr $left, LogicalOpType $type, Expr $right) {
+        parent::__construct($loc, $left, $right);
+        $this->type = $type;
+    }
+
+    public function unparseExpr():\PhpParser\Node\Expr {
+        $left  = $this->left->unparseExpr();
+        $right = $this->right->unparseExpr();
+        switch ($this->type->value()) {
+            case LogicalOpType::BOOl_AND:
+                return new \PhpParser\Node\Expr\BinaryOp\BooleanAnd($left, $right);
+            case LogicalOpType::BOOl_OR:
+                return new \PhpParser\Node\Expr\BinaryOp\BooleanOr($left, $right);
+            case LogicalOpType::LOGIC_AND:
+                return new \PhpParser\Node\Expr\BinaryOp\LogicalAnd($left, $right);
+            case LogicalOpType::LOGIC_OR:
+                return new \PhpParser\Node\Expr\BinaryOp\LogicalOr($left, $right);
+            case LogicalOpType::LOGIC_XOR:
+                return new \PhpParser\Node\Expr\BinaryOp\LogicalXor($left, $right);
+            default:
+                throw new \Exception('huh?');
+        }
+    }
+
+    public function checkExpr(Context\Context $context, bool $noErrors):Type\Type {
+        // TODO do some actual checking
+        // TODO maybe return "true" or "false" single values if the value is known
+        return Type\Type::bool($this);
+    }
+}
+
+class Coalesce extends AbstractBinOp {
+    public function unparseExpr():\PhpParser\Node\Expr {
+        $left  = $this->left->unparseExpr();
+        $right = $this->right->unparseExpr();
+        return new \PhpParser\Node\Expr\BinaryOp\Coalesce($left, $right);
+    }
+
+    public function checkExpr(Context\Context $context, bool $noErrors):Type\Type {
+        $left  = $this->left->checkExpr($context, $noErrors)->removeNull($context);
+        $right = $this->right->checkExpr($context, $noErrors);
+        return Type\Type::union($this, [$left, $right]);
+    }
+}
+
+class Spaceship extends AbstractBinOp {
+    public function unparseExpr():\PhpParser\Node\Expr {
+        $left  = $this->left->unparseExpr();
+        $right = $this->right->unparseExpr();
+        return new \PhpParser\Node\Expr\BinaryOp\Spaceship($left, $right);
+    }
+
+    public function checkExpr(Context\Context $context, bool $noErrors):Type\Type {
+        // TODO do some actual checking here
+        return Type\Type::union($this, [
+            new Type\SingleValue($this, -1),
+            new Type\SingleValue($this, 0),
+            new Type\SingleValue($this, 1),
+        ]);
+    }
+}
+
+class ComparisonOpType extends \JesseSchalken\Enum\StringEnum {
     const EQUAL            = '==';
     const IDENTICAL        = '===';
     const NOT_EQUAL        = '!=';
@@ -444,269 +721,116 @@ class BinOp extends Expr {
     const LESS             = '<';
     const GREATER_OR_EQUAL = '>=';
     const LESS_OR_EQUAL    = '<=';
-    const SPACESHIP        = '<=>';
-    const COALESCE         = '??';
 
-    // Logical
-    const BOOl_AND  = '&&';
-    const BOOl_OR   = '||';
-    const LOGIC_AND = 'and';
-    const LOGIC_OR  = 'or';
-    const LOGIC_XOR = 'xor';
-
-    // String
-    const CONCAT     = '.';
-
-    // Type
-    const INSTANCEOF = 'instanceof';
-
-    // Assignment
-    const ASSIGN             = '=';
-    const ASSIGN_REF         = '=&';
-    const ASSIGN_ADD         = '+=';
-    const ASSIGN_SUBTRACT    = '-=';
-    const ASSIGN_MULTIPLY    = '*=';
-    const ASSIGN_DIVIDE      = '/=';
-    const ASSIGN_MODULUS     = '%=';
-    const ASSIGN_EXPONENT    = '**=';
-    const ASSIGN_CONCAT      = '.=';
-    const ASSIGN_BIT_AND     = '&=';
-    const ASSIGN_BIT_OR      = '|=';
-    const ASSIGN_BIT_XOR     = '^=';
-    const ASSIGN_SHIFT_LEFT  = '<<=';
-    const ASSIGN_SHIFT_RIGHT = '>>=';
-
-    /** @var string */
-    private $type;
-    /** @var Expr */
-    private $left;
-    /** @var Expr */
-    private $right;
-
-    public function __construct(HasCodeLoc $loc, Expr $left, string $type, Expr $right) {
-        parent::__construct($loc);
-        $this->left  = $left;
-        $this->type  = $type;
-        $this->right = $right;
+    public static function values() {
+        return [
+            self::EQUAL,
+            self::IDENTICAL,
+            self::NOT_EQUAL,
+            self::NOT_IDENTICAL,
+            self::GREATER,
+            self::LESS,
+            self::GREATER_OR_EQUAL,
+            self::LESS_OR_EQUAL,
+        ];
     }
 
-    public function subStmts(bool $deep):array {
-        return [$this->left, $this->right];
+    public function __toString() {
+        return $this->value();
+    }
+}
+
+class Comparison extends AbstractBinOp {
+    /** @var ComparisonOpType */
+    private $type;
+
+    public function __construct(HasCodeLoc $loc, Expr $left, Expr $right, ComparisonOpType $type) {
+        parent::__construct($loc, $left, $right);
+        $this->type = $type;
     }
 
     public function unparseExpr():\PhpParser\Node\Expr {
-        switch ($this->type) {
-            case self:: INSTANCEOF:
-                return new \PhpParser\Node\Expr\Instanceof_(
-                    $this->left->unparseExpr(),
-                    $this->right->unparseExprOrName()
-                );
+        $left  = $this->left->unparseExpr();
+        $right = $this->right->unparseExpr();
+        switch ($this->type->value()) {
+            case ComparisonOpType::EQUAL:
+                return new \PhpParser\Node\Expr\BinaryOp\Equal($left, $right);
+            case ComparisonOpType::IDENTICAL:
+                return new \PhpParser\Node\Expr\BinaryOp\Identical($left, $right);
+            case ComparisonOpType::NOT_EQUAL:
+                return new \PhpParser\Node\Expr\BinaryOp\NotEqual($left, $right);
+            case ComparisonOpType::NOT_IDENTICAL:
+                return new \PhpParser\Node\Expr\BinaryOp\NotIdentical($left, $right);
+            case ComparisonOpType::GREATER:
+                return new \PhpParser\Node\Expr\BinaryOp\Greater($left, $right);
+            case ComparisonOpType::LESS:
+                return new \PhpParser\Node\Expr\BinaryOp\Smaller($left, $right);
+            case ComparisonOpType::GREATER_OR_EQUAL:
+                return new \PhpParser\Node\Expr\BinaryOp\GreaterOrEqual($left, $right);
+            case ComparisonOpType::LESS_OR_EQUAL:
+                return new \PhpParser\Node\Expr\BinaryOp\SmallerOrEqual($left, $right);
+            default:
+                throw new \Exception("huh? $this->type");
         }
+    }
+
+    public function checkExpr(Context\Context $context, bool $noErrors):Type\Type {
+        // TODO do some actual checking
+        // TODO should probably just check the lhs/rhs against int|bool|float
+        return Type\Type::bool($this);
+    }
+}
+
+class BinOp extends AbstractBinOp {
+    /** @var BinOpType */
+    private $type;
+
+    public function __construct(HasCodeLoc $loc, Expr $left, BinOpType $type, Expr $right) {
+        parent::__construct($loc, $left, $right);
+        $this->type = $type;
+    }
+
+    public function unparseExpr():\PhpParser\Node\Expr {
         $left  = $this->left->unparseExpr();
         $right = $this->right->unparseExpr();
         switch ($this->type) {
-            case self::ADD:
+            case BinOpType::ADD:
                 return new \PhpParser\Node\Expr\BinaryOp\Plus($left, $right);
-            case self::SUBTRACT:
+            case BinOpType::SUBTRACT:
                 return new \PhpParser\Node\Expr\BinaryOp\Minus($left, $right);
-            case self::MULTIPLY:
+            case BinOpType::MULTIPLY:
                 return new \PhpParser\Node\Expr\BinaryOp\Mul($left, $right);
-            case self::DIVIDE:
+            case BinOpType::DIVIDE:
                 return new \PhpParser\Node\Expr\BinaryOp\Div($left, $right);
-            case self::MODULUS:
+            case BinOpType::MODULUS:
                 return new \PhpParser\Node\Expr\BinaryOp\Mod($left, $right);
-            case self::EXPONENT:
+            case BinOpType::EXPONENT:
                 return new \PhpParser\Node\Expr\BinaryOp\Pow($left, $right);
-            case self::BIT_AND:
+            case BinOpType::BIT_AND:
                 return new \PhpParser\Node\Expr\BinaryOp\BitwiseAnd($left, $right);
-            case self::BIT_OR:
+            case BinOpType::BIT_OR:
                 return new \PhpParser\Node\Expr\BinaryOp\BitwiseOr($left, $right);
-            case self::BIT_XOR:
+            case BinOpType::BIT_XOR:
                 return new \PhpParser\Node\Expr\BinaryOp\BitwiseXor($left, $right);
-            case self::SHIFT_LEFT:
+            case BinOpType::SHIFT_LEFT:
                 return new \PhpParser\Node\Expr\BinaryOp\ShiftLeft($left, $right);
-            case self::SHIFT_RIGHT:
+            case BinOpType::SHIFT_RIGHT:
                 return new \PhpParser\Node\Expr\BinaryOp\ShiftRight($left, $right);
-            case self::EQUAL:
-                return new \PhpParser\Node\Expr\BinaryOp\Equal($left, $right);
-            case self::IDENTICAL:
-                return new \PhpParser\Node\Expr\BinaryOp\Identical($left, $right);
-            case self::NOT_EQUAL:
-                return new \PhpParser\Node\Expr\BinaryOp\NotEqual($left, $right);
-            case self::NOT_IDENTICAL:
-                return new \PhpParser\Node\Expr\BinaryOp\NotIdentical($left, $right);
-            case self::GREATER:
-                return new \PhpParser\Node\Expr\BinaryOp\Greater($left, $right);
-            case self::LESS:
-                return new \PhpParser\Node\Expr\BinaryOp\Smaller($left, $right);
-            case self::GREATER_OR_EQUAL:
-                return new \PhpParser\Node\Expr\BinaryOp\GreaterOrEqual($left, $right);
-            case self::LESS_OR_EQUAL:
-                return new \PhpParser\Node\Expr\BinaryOp\SmallerOrEqual($left, $right);
-            case self::SPACESHIP:
-                return new \PhpParser\Node\Expr\BinaryOp\Spaceship($left, $right);
-            case self::COALESCE:
-                return new \PhpParser\Node\Expr\BinaryOp\Coalesce($left, $right);
-            case self::BOOl_AND:
-                return new \PhpParser\Node\Expr\BinaryOp\BooleanAnd($left, $right);
-            case self::BOOl_OR:
-                return new \PhpParser\Node\Expr\BinaryOp\BooleanOr($left, $right);
-            case self::LOGIC_AND:
-                return new \PhpParser\Node\Expr\BinaryOp\LogicalAnd($left, $right);
-            case self::LOGIC_OR:
-                return new \PhpParser\Node\Expr\BinaryOp\LogicalOr($left, $right);
-            case self::LOGIC_XOR:
-                return new \PhpParser\Node\Expr\BinaryOp\LogicalXor($left, $right);
-            case self::CONCAT:
+            case BinOpType::CONCAT:
                 return new \PhpParser\Node\Expr\BinaryOp\Concat($left, $right);
-            case self::ASSIGN:
-                return new \PhpParser\Node\Expr\Assign($left, $right);
-            case self::ASSIGN_REF:
-                return new \PhpParser\Node\Expr\AssignRef($left, $right);
-            case self::ASSIGN_ADD:
-                return new \PhpParser\Node\Expr\AssignOp\Plus($left, $right);
-            case self::ASSIGN_SUBTRACT:
-                return new \PhpParser\Node\Expr\AssignOp\Minus($left, $right);
-            case self::ASSIGN_MULTIPLY:
-                return new \PhpParser\Node\Expr\AssignOp\Mul($left, $right);
-            case self::ASSIGN_DIVIDE:
-                return new \PhpParser\Node\Expr\AssignOp\Div($left, $right);
-            case self::ASSIGN_MODULUS:
-                return new \PhpParser\Node\Expr\AssignOp\Mod($left, $right);
-            case self::ASSIGN_EXPONENT:
-                return new \PhpParser\Node\Expr\AssignOp\Pow($left, $right);
-            case self::ASSIGN_CONCAT:
-                return new \PhpParser\Node\Expr\AssignOp\Concat($left, $right);
-            case self::ASSIGN_BIT_AND:
-                return new \PhpParser\Node\Expr\AssignOp\BitwiseAnd($left, $right);
-            case self::ASSIGN_BIT_OR:
-                return new \PhpParser\Node\Expr\AssignOp\BitwiseOr($left, $right);
-            case self::ASSIGN_BIT_XOR:
-                return new \PhpParser\Node\Expr\AssignOp\BitwiseXor($left, $right);
-            case self::ASSIGN_SHIFT_LEFT:
-                return new \PhpParser\Node\Expr\AssignOp\ShiftLeft($left, $right);
-            case self::ASSIGN_SHIFT_RIGHT:
-                return new \PhpParser\Node\Expr\AssignOp\ShiftRight($left, $right);
-
             default:
                 throw new \Exception('Invalid binary operator type: ' . $this->type);
         }
     }
 
-    protected function inferLocals(Context\Context $context):array {
-        $locals = parent::inferLocals($context);
-        switch ($this->type) {
-            case self::ASSIGN:
-            case self::ASSIGN_REF:
-                return merge_types($locals, $this->left->inferLocal($this->right->checkExpr($context, true), $context), $context);
-            default:
-                return $locals;
-        }
-    }
-
     public function checkExpr(Context\Context $context, bool $noErrors):Type\Type {
-        switch ($this->type) {
-            case self:: INSTANCEOF:
-                return Type\Type::bool($this);
-
-            case self::ADD:
-            case self::SUBTRACT:
-            case self::MULTIPLY:
-            case self::DIVIDE:
-            case self::MODULUS:
-            case self::EXPONENT:
-                return Type\Type::number($this);
-
-            case self::BIT_AND:
-            case self::BIT_OR:
-            case self::BIT_XOR:
-            case self::SHIFT_LEFT:
-            case self::SHIFT_RIGHT:
-                return new Type\Int_($this);
-
-            case self::EQUAL:
-            case self::IDENTICAL:
-            case self::NOT_EQUAL:
-            case self::NOT_IDENTICAL:
-            case self::GREATER:
-            case self::LESS:
-            case self::GREATER_OR_EQUAL:
-            case self::LESS_OR_EQUAL:
-                return Type\Type::bool($this);
-
-            case self::SPACESHIP:
-                return Type\Type::union($this, [
-                    new Type\SingleValue($this, -1),
-                    new Type\SingleValue($this, 0),
-                    new Type\SingleValue($this, 1),
-                ]);
-
-            case self::COALESCE:
-                $left  = $this->left->checkExpr($context, $noErrors)->removeNull($context);
-                $right = $this->right->checkExpr($context, $noErrors);
-                return Type\Type::union($this, [$left, $right]);
-
-            case self::BOOl_AND:
-            case self::BOOl_OR:
-            case self::LOGIC_AND:
-            case self::LOGIC_OR:
-            case self::LOGIC_XOR:
-                return Type\Type::bool($this);
-
-            case self::CONCAT:
-                // TODO Make this be really smart and return a SingleValue if it can
-                return new Type\String_($this);
-
-            case self::ASSIGN:
-            case self::ASSIGN_REF:
-                $right = $this->right->checkExpr($context, $noErrors);
-                if (!$noErrors) {
-                    $left  = $this->left->checkExpr($context, $noErrors);
-                    if ($this->type === self::ASSIGN_REF) {
-                        $left->checkEquivelant($this, $right, $context);
-                    } else {
-                        $left->checkContains($this, $right, $context);
-                    }
-                }
-                return $right;
-
-            case self::ASSIGN_ADD:
-            case self::ASSIGN_SUBTRACT:
-            case self::ASSIGN_MULTIPLY:
-            case self::ASSIGN_DIVIDE:
-            case self::ASSIGN_MODULUS:
-            case self::ASSIGN_EXPONENT:
-                $number = Type\Type::number($this);
-                if (!$noErrors) {
-                    $left  = $this->left->checkExpr($context, $noErrors);
-                    $right = $this->right->checkExpr($context, $noErrors);
-                    $right->checkAgainst($this, $number, $context); // read RHS
-                    $left->checkContains($this, $number, $context); // write LHS
-                    $left->checkAgainst($this, $number, $context); // read LHS
-                }
-                return $number;
-
-            case self::ASSIGN_CONCAT:
-                return new Type\String_($this);
-
-            case self::ASSIGN_BIT_AND:
-            case self::ASSIGN_BIT_OR:
-            case self::ASSIGN_BIT_XOR:
-            case self::ASSIGN_SHIFT_LEFT:
-            case self::ASSIGN_SHIFT_RIGHT:
-                if (!$noErrors) {
-                    $this->left->checkExpr($context, $noErrors)->checkAgainst($this, new Type\Int_($this), $context);
-                    $this->right->checkExpr($context, $noErrors)->checkAgainst($this, new Type\Int_($this), $context);
-                }
-                return new Type\Int_($this);
-
-            default:
-                throw new \Exception('huh?');
-        }
+        $left  = $this->left->checkExpr($context, $noErrors);
+        $right = $this->right->checkExpr($context, $noErrors);
+        return $left->doBinOp($this, $right, $this->type, $context, $noErrors);
     }
 }
 
-class Cast extends Expr {
+class CastType extends \JesseSchalken\Enum\StringEnum {
     const INT    = 'int';
     const BOOL   = 'bool';
     const FLOAT  = 'float';
@@ -715,12 +839,71 @@ class Cast extends Expr {
     const OBJECT = 'object';
     const UNSET  = 'unset';
 
+    public static function values() {
+        return [
+            self::INT,
+            self::BOOL,
+            self::FLOAT,
+            self::ARRAY,
+            self::OBJECT,
+            self::UNSET,
+        ];
+    }
+
+    public function toType(HasCodeLoc $loc):Type\Type {
+        switch ($this->value()) {
+            case self::INT:
+                return new Type\Int_($loc);
+            case self::BOOL:
+                return Type\Type::bool($loc);
+            case self::FLOAT:
+                return new Type\Float_($loc);
+            case self::STRING:
+                return new Type\String_($loc);
+            case self::ARRAY:
+                return new Type\Array_($loc, new Type\Mixed($loc));
+            case self::OBJECT:
+                return new Type\Object($loc);
+            case self::UNSET:
+                return new Type\SingleValue($loc, null);
+            default:
+                throw new \Exception('Invalid cast type: ' . $this);
+        }
+    }
+
+    public function evaluate($value) {
+        switch ($this->value()) {
+            case self::INT:
+                return (int)$value;
+            case self::BOOL:
+                return (bool)$value;
+            case self::FLOAT:
+                return (float)$value;
+            case self::STRING:
+                return (string)$value;
+            case self::ARRAY:
+                return (array)$value;
+            case self::OBJECT:
+                return (object)$value;
+            case self::UNSET:
+                return (unset)$value;
+            default:
+                throw new \Exception('Invalid cast type: ' . $this);
+        }
+    }
+
+    public function __toString() {
+        return $this->value();
+    }
+}
+
+class Cast extends Expr {
     /** @var string */
     private $type;
-    /** @var Expr */
+    /** @var CastType */
     private $expr;
 
-    public function __construct(HasCodeLoc $loc, string $type, Expr $expr) {
+    public function __construct(HasCodeLoc $loc, CastType $type, Expr $expr) {
         parent::__construct($loc);
         $this->type = $type;
         $this->expr = $expr;
@@ -732,20 +915,20 @@ class Cast extends Expr {
 
     public function unparseExpr():\PhpParser\Node\Expr {
         $expr = $this->expr->unparseExpr();
-        switch ($this->type) {
-            case self::INT:
+        switch ($this->type->value()) {
+            case CastType::INT:
                 return new \PhpParser\Node\Expr\Cast\Int_($expr);
-            case self::BOOL:
+            case CastType::BOOL:
                 return new \PhpParser\Node\Expr\Cast\Bool_($expr);
-            case self::FLOAT:
+            case CastType::FLOAT:
                 return new \PhpParser\Node\Expr\Cast\Double($expr);
-            case self::STRING:
+            case CastType::STRING:
                 return new \PhpParser\Node\Expr\Cast\String_($expr);
-            case self::ARRAY:
+            case CastType::ARRAY:
                 return new \PhpParser\Node\Expr\Cast\Array_($expr);
-            case self::OBJECT:
+            case CastType::OBJECT:
                 return new \PhpParser\Node\Expr\Cast\Object_($expr);
-            case self::UNSET:
+            case CastType::UNSET:
                 return new \PhpParser\Node\Expr\Cast\Unset_($expr);
             default:
                 throw new \Exception('Invalid cast type: ' . $this->type);
@@ -753,24 +936,7 @@ class Cast extends Expr {
     }
 
     public function checkExpr(Context\Context $context, bool $noErrors):Type\Type {
-        switch ($this->type) {
-            case self::INT:
-                return new Type\Int_($this);
-            case self::BOOL:
-                return Type\Type::bool($this);
-            case self::FLOAT:
-                return new Type\Float_($this);
-            case self::STRING:
-                return new Type\String_($this);
-            case self::ARRAY:
-                return new Type\Array_($this, new Type\Mixed($this));
-            case self::OBJECT:
-                return new Type\Object($this);
-            case self::UNSET:
-                return new Type\SingleValue($this, null);
-            default:
-                throw new \Exception('Invalid cast type: ' . $this->type);
-        }
+        return $this->expr->checkExpr($context, $noErrors)->doCast($this, $this->type, $context, $noErrors);
     }
 }
 

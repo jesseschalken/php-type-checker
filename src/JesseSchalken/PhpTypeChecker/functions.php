@@ -83,7 +83,7 @@ function remove_namespace(string $name):string {
  * @param Type\Type[]     $types1
  * @param Type\Type[]     $types2
  * @param Context\Context $context
- * @return array|Type\Type[]
+ * @return Type\Type[]
  */
 function merge_types(array $types1, array $types2, Context\Context $context):array {
     foreach ($types2 as $key => $type) {
@@ -92,5 +92,9 @@ function merge_types(array $types1, array $types2, Context\Context $context):arr
             : $type;
     }
     return $types1;
+}
+
+function to_array_key($value):string {
+    return (string)(array_keys([$value => null])[0]);
 }
 

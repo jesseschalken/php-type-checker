@@ -335,6 +335,26 @@ abstract class Type extends PhpTypeChecker\Node {
     public function getStringValues(Context\Context $context):array {
         return [];
     }
+
+    public function doBinOp(HasCodeLoc $loc, Type $rhs, Expr\BinOpType $type, Context\Context $context, bool $noErrors):Type {
+        if ($noErrors) {
+            return Type::none($loc);
+        } else {
+            return $context->addError("Cannot evaluate $this $type $rhs", $loc);
+        }
+    }
+
+    public function doBinOpSingleValue(HasCodeLoc $loc, $lhs, Expr\BinOpType $type, Context\Context $context, bool $noErrors):Type {
+        // TODO
+    }
+
+    public function doCast(HasCodeLoc $loc, Expr\CastType $type, Context\Context $context, bool $noErrors):Type {
+        // Cast to "unset" is allowed for everything
+        if ($type->value() !== Expr\CastType::UNSET && !$noErrors) {
+            $context->addError("Cannot cast $this to '$type'", $loc);
+        }
+        return $type->toType($loc);
+    }
 }
 
 class ForeachResult {
@@ -898,27 +918,23 @@ class SingleValue extends SingleType {
     }
 
     public function useAsArrayKey(HasCodeLoc $loc, Type $array, Context\Context $context, bool $noErrors):Type {
-        $value = $this->value;
-        switch (true) {
-            case is_float($value);
-                /** @noinspection PhpMissingBreakStatementInspection */
-            case is_bool($value);
-                $value = (int)$value;
-            case is_string($value):
-            case is_int($value):
-            case is_null($value):
-                return $array->getKnownArrayKey((string)$value, $loc, $context, $noErrors);
-            default:
-                return parent::useAsArrayKey($loc, $array, $context, $noErrors);
-        }
+        return $array->getKnownArrayKey(PhpTypeChecker\to_array_key($this->value), $loc, $context, $noErrors);
+    }
+
+    public function doBinOp(HasCodeLoc $loc, Type $rhs, Expr\BinOpType $type, Context\Context $context, bool $noErrors):Type {
+        return $rhs->doBinOpSingleValue($loc, $this->value, $type, $context, $noErrors);
+    }
+
+    public function doBinOpSingleValue(HasCodeLoc $loc, $lhs, Expr\BinOpType $type, Context\Context $context, bool $noErrors):Type {
+        return new self($loc, $type->evaluate($lhs, $this->value));
+    }
+
+    public function doCast(HasCodeLoc $loc, Expr\CastType $type, Context\Context $context, bool $noErrors):Type {
+        return new self($loc, $type->evaluate($this->value));
     }
 
     public function useToSetArrayKey(HasCodeLoc $loc, Context\Context $context, Type $array, Type $value, bool $noErrors):Type {
-        $val = $this->value;
-        if (is_bool($val) || is_float($val)) {
-            $val = (int)$val;
-        }
-        return $array->setArrayKey($loc, $context, (string)$val, $value, $noErrors);
+        return $array->setArrayKey($loc, $context, PhpTypeChecker\to_array_key($this->value), $value, $noErrors);
     }
 
     public function isFalsy():bool {

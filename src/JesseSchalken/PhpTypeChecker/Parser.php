@@ -1094,11 +1094,11 @@ final class Parser {
                     return new Constants\GetConstant($loc, $className);
             }
         } elseif ($node instanceof \PhpParser\Node\Expr\Assign) {
-            return new Expr\BinOp(
+            return new Expr\Assign(
                 $loc,
                 $this->parseExpr($node->var),
-                Expr\BinOp::ASSIGN,
-                $this->parseExpr($node->expr)
+                $this->parseExpr($node->expr),
+                false
             );
         } elseif ($node instanceof \PhpParser\Node\Scalar\LNumber) {
             return new Constants\Literal($loc, $node->value);
@@ -1131,7 +1131,7 @@ final class Parser {
             return new Expr\BinOp(
                 $loc,
                 $this->parseExpr($node->left),
-                Expr\BinOp::CONCAT,
+                new Expr\BinOpType(Expr\BinOpType::CONCAT),
                 $this->parseExpr($node->right)
             );
         } elseif ($node instanceof \PhpParser\Node\Scalar\MagicConst) {
@@ -1246,10 +1246,9 @@ final class Parser {
         } elseif ($node instanceof \PhpParser\Node\Expr\Cast) {
             return $this->parseCast($node, $loc);
         } elseif ($node instanceof \PhpParser\Node\Expr\Instanceof_) {
-            return new Expr\BinOp(
+            return new Expr\InstanceOf_(
                 $loc,
                 $this->parseExpr($node->expr),
-                Expr\BinOp:: INSTANCEOF,
                 $this->parseExprClass($node->class)
             );
         } elseif ($node instanceof \PhpParser\Node\Expr\Clone_) {
@@ -1289,11 +1288,11 @@ final class Parser {
             }
             return new LValue\List_($loc, $exprs);
         } elseif ($node instanceof \PhpParser\Node\Expr\AssignRef) {
-            return new Expr\BinOp(
+            return new Expr\Assign(
                 $loc,
                 $this->parseExpr($node->var),
-                Expr\BinOp::ASSIGN_REF,
-                $this->parseExpr($node->expr)
+                $this->parseExpr($node->expr),
+                true
             );
         } elseif ($node instanceof \PhpParser\Node\Expr\BitwiseNot) {
             return new Expr\UnOp($loc, Expr\UnOp::BIT_NOT, $this->parseExpr($node->expr));
@@ -1310,19 +1309,19 @@ final class Parser {
 
     private function parseCast(\PhpParser\Node\Expr\Cast $node, HasCodeLoc $loc):Expr\Expr {
         if ($node instanceof \PhpParser\Node\Expr\Cast\Array_) {
-            $type = Expr\Cast::ARRAY;
+            $type = new Expr\CastType(Expr\CastType::ARRAY);
         } elseif ($node instanceof \PhpParser\Node\Expr\Cast\Bool_) {
-            $type = Expr\Cast::BOOL;
+            $type = new Expr\CastType(Expr\CastType::BOOL);
         } elseif ($node instanceof \PhpParser\Node\Expr\Cast\Double) {
-            $type = Expr\Cast::FLOAT;
+            $type = new Expr\CastType(Expr\CastType::FLOAT);
         } elseif ($node instanceof \PhpParser\Node\Expr\Cast\Int_) {
-            $type = Expr\Cast::INT;
+            $type = new Expr\CastType(Expr\CastType::INT);
         } elseif ($node instanceof \PhpParser\Node\Expr\Cast\Object_) {
-            $type = Expr\Cast::OBJECT;
+            $type = new Expr\CastType(Expr\CastType::OBJECT);
         } elseif ($node instanceof \PhpParser\Node\Expr\Cast\String_) {
-            $type = Expr\Cast::STRING;
+            $type = new Expr\CastType(Expr\CastType::STRING);
         } elseif ($node instanceof \PhpParser\Node\Expr\Cast\Unset_) {
-            $type = Expr\Cast::UNSET;
+            $type = new Expr\CastType(Expr\CastType::UNSET);
         } else {
             throw new \Exception('Unknown cast type: ' . get_class($node));
         }
@@ -1332,29 +1331,29 @@ final class Parser {
 
     private function parseAssignOp(\PhpParser\Node\Expr\AssignOp $node, HasCodeLoc $loc):Expr\Expr {
         if ($node instanceof \PhpParser\Node\Expr\AssignOp\BitwiseAnd) {
-            $type = Expr\BinOp::ASSIGN_BIT_AND;
+            $type = new Expr\BinOpType(Expr\BinOpType::BIT_AND);
         } elseif ($node instanceof \PhpParser\Node\Expr\AssignOp\BitwiseOr) {
-            $type = Expr\BinOp::ASSIGN_BIT_OR;
+            $type = new Expr\BinOpType(Expr\BinOpType::BIT_OR);
         } elseif ($node instanceof \PhpParser\Node\Expr\AssignOp\BitwiseXor) {
-            $type = Expr\BinOp::ASSIGN_BIT_XOR;
+            $type = new Expr\BinOpType(Expr\BinOpType::BIT_XOR);
         } elseif ($node instanceof \PhpParser\Node\Expr\AssignOp\Concat) {
-            $type = Expr\BinOp::ASSIGN_CONCAT;
+            $type = new Expr\BinOpType(Expr\BinOpType::CONCAT);
         } elseif ($node instanceof \PhpParser\Node\Expr\AssignOp\Div) {
-            $type = Expr\BinOp::ASSIGN_DIVIDE;
+            $type = new Expr\BinOpType(Expr\BinOpType::DIVIDE);
         } elseif ($node instanceof \PhpParser\Node\Expr\AssignOp\Minus) {
-            $type = Expr\BinOp::ASSIGN_SUBTRACT;
+            $type = new Expr\BinOpType(Expr\BinOpType::SUBTRACT);
         } elseif ($node instanceof \PhpParser\Node\Expr\AssignOp\Mod) {
-            $type = Expr\BinOp::ASSIGN_MODULUS;
+            $type = new Expr\BinOpType(Expr\BinOpType::MODULUS);
         } elseif ($node instanceof \PhpParser\Node\Expr\AssignOp\Mul) {
-            $type = Expr\BinOp::ASSIGN_MULTIPLY;
+            $type = new Expr\BinOpType(Expr\BinOpType::MULTIPLY);
         } elseif ($node instanceof \PhpParser\Node\Expr\AssignOp\Plus) {
-            $type = Expr\BinOp::ASSIGN_ADD;
+            $type = new Expr\BinOpType(Expr\BinOpType::ADD);
         } elseif ($node instanceof \PhpParser\Node\Expr\AssignOp\Pow) {
-            $type = Expr\BinOp::ASSIGN_EXPONENT;
+            $type = new Expr\BinOpType(Expr\BinOpType::EXPONENT);
         } elseif ($node instanceof \PhpParser\Node\Expr\AssignOp\ShiftLeft) {
-            $type = Expr\BinOp::ASSIGN_SHIFT_LEFT;
+            $type = new Expr\BinOpType(Expr\BinOpType::SHIFT_LEFT);
         } elseif ($node instanceof \PhpParser\Node\Expr\AssignOp\ShiftRight) {
-            $type = Expr\BinOp::ASSIGN_SHIFT_RIGHT;
+            $type = new Expr\BinOpType(Expr\BinOpType::SHIFT_RIGHT);
         } else {
             throw new \Exception('Unhandled assignment operator: ' . get_class($node));
         }
@@ -1365,67 +1364,84 @@ final class Parser {
     }
 
     private function parseBinaryOp(\PhpParser\Node\Expr\BinaryOp $node, HasCodeLoc $loc):Expr\Expr {
-        if ($node instanceof \PhpParser\Node\Expr\BinaryOp\BitwiseAnd) {
-            $type = Expr\BinOp::BIT_AND;
-        } elseif ($node instanceof \PhpParser\Node\Expr\BinaryOp\BitwiseOr) {
-            $type = Expr\BinOp::BIT_OR;
-        } elseif ($node instanceof \PhpParser\Node\Expr\BinaryOp\BitwiseXor) {
-            $type = Expr\BinOp::BIT_XOR;
-        } elseif ($node instanceof \PhpParser\Node\Expr\BinaryOp\BooleanAnd) {
-            $type = Expr\BinOp::BOOl_AND;
-        } elseif ($node instanceof \PhpParser\Node\Expr\BinaryOp\BooleanOr) {
-            $type = Expr\BinOp::BOOl_OR;
-        } elseif ($node instanceof \PhpParser\Node\Expr\BinaryOp\Coalesce) {
-            $type = Expr\BinOp::COALESCE;
-        } elseif ($node instanceof \PhpParser\Node\Expr\BinaryOp\Concat) {
-            $type = Expr\BinOp::CONCAT;
-        } elseif ($node instanceof \PhpParser\Node\Expr\BinaryOp\Div) {
-            $type = Expr\BinOp::DIVIDE;
-        } elseif ($node instanceof \PhpParser\Node\Expr\BinaryOp\Equal) {
-            $type = Expr\BinOp::EQUAL;
-        } elseif ($node instanceof \PhpParser\Node\Expr\BinaryOp\Greater) {
-            $type = Expr\BinOp::GREATER;
-        } elseif ($node instanceof \PhpParser\Node\Expr\BinaryOp\GreaterOrEqual) {
-            $type = Expr\BinOp::GREATER_OR_EQUAL;
-        } elseif ($node instanceof \PhpParser\Node\Expr\BinaryOp\Identical) {
-            $type = Expr\BinOp::IDENTICAL;
-        } elseif ($node instanceof \PhpParser\Node\Expr\BinaryOp\LogicalAnd) {
-            $type = Expr\BinOp::LOGIC_AND;
-        } elseif ($node instanceof \PhpParser\Node\Expr\BinaryOp\LogicalOr) {
-            $type = Expr\BinOp::LOGIC_OR;
-        } elseif ($node instanceof \PhpParser\Node\Expr\BinaryOp\LogicalXor) {
-            $type = Expr\BinOp::LOGIC_XOR;
-        } elseif ($node instanceof \PhpParser\Node\Expr\BinaryOp\Minus) {
-            $type = Expr\BinOp::SUBTRACT;
-        } elseif ($node instanceof \PhpParser\Node\Expr\BinaryOp\Mod) {
-            $type = Expr\BinOp::MODULUS;
-        } elseif ($node instanceof \PhpParser\Node\Expr\BinaryOp\Mul) {
-            $type = Expr\BinOp::MULTIPLY;
-        } elseif ($node instanceof \PhpParser\Node\Expr\BinaryOp\NotEqual) {
-            $type = Expr\BinOp::NOT_EQUAL;
-        } elseif ($node instanceof \PhpParser\Node\Expr\BinaryOp\NotIdentical) {
-            $type = Expr\BinOp::NOT_IDENTICAL;
-        } elseif ($node instanceof \PhpParser\Node\Expr\BinaryOp\Plus) {
-            $type = Expr\BinOp::ADD;
-        } elseif ($node instanceof \PhpParser\Node\Expr\BinaryOp\Pow) {
-            $type = Expr\BinOp::EXPONENT;
-        } elseif ($node instanceof \PhpParser\Node\Expr\BinaryOp\ShiftLeft) {
-            $type = Expr\BinOp::SHIFT_LEFT;
-        } elseif ($node instanceof \PhpParser\Node\Expr\BinaryOp\ShiftRight) {
-            $type = Expr\BinOp::SHIFT_RIGHT;
-        } elseif ($node instanceof \PhpParser\Node\Expr\BinaryOp\Smaller) {
-            $type = Expr\BinOp::LESS;
-        } elseif ($node instanceof \PhpParser\Node\Expr\BinaryOp\SmallerOrEqual) {
-            $type = Expr\BinOp::LESS_OR_EQUAL;
+        $left  = $this->parseExpr($node->left);
+        $right = $this->parseExpr($node->right);
+
+        if ($node instanceof \PhpParser\Node\Expr\BinaryOp\Coalesce) {
+            return new Expr\Coalesce($loc, $left, $right);
         } elseif ($node instanceof \PhpParser\Node\Expr\BinaryOp\Spaceship) {
-            $type = Expr\BinOp::SPACESHIP;
+            return new Expr\Spaceship($loc, $left, $right);
+        } else {
+            goto tryBinOp;
+        }
+
+        tryBinOp:
+        if ($node instanceof \PhpParser\Node\Expr\BinaryOp\BitwiseAnd) {
+            $type = new Expr\BinOpType(Expr\BinOpType::BIT_AND);
+        } elseif ($node instanceof \PhpParser\Node\Expr\BinaryOp\BitwiseOr) {
+            $type = new Expr\BinOpType(Expr\BinOpType::BIT_OR);
+        } elseif ($node instanceof \PhpParser\Node\Expr\BinaryOp\BitwiseXor) {
+            $type = new Expr\BinOpType(Expr\BinOpType::BIT_XOR);
+        } elseif ($node instanceof \PhpParser\Node\Expr\BinaryOp\Concat) {
+            $type = new Expr\BinOpType(Expr\BinOpType::CONCAT);
+        } elseif ($node instanceof \PhpParser\Node\Expr\BinaryOp\Div) {
+            $type = new Expr\BinOpType(Expr\BinOpType::DIVIDE);
+        } elseif ($node instanceof \PhpParser\Node\Expr\BinaryOp\Minus) {
+            $type = new Expr\BinOpType(Expr\BinOpType::SUBTRACT);
+        } elseif ($node instanceof \PhpParser\Node\Expr\BinaryOp\Mod) {
+            $type = new Expr\BinOpType(Expr\BinOpType::MODULUS);
+        } elseif ($node instanceof \PhpParser\Node\Expr\BinaryOp\Mul) {
+            $type = new Expr\BinOpType(Expr\BinOpType::MULTIPLY);
+        } elseif ($node instanceof \PhpParser\Node\Expr\BinaryOp\Plus) {
+            $type = new Expr\BinOpType(Expr\BinOpType::ADD);
+        } elseif ($node instanceof \PhpParser\Node\Expr\BinaryOp\Pow) {
+            $type = new Expr\BinOpType(Expr\BinOpType::EXPONENT);
+        } elseif ($node instanceof \PhpParser\Node\Expr\BinaryOp\ShiftLeft) {
+            $type = new Expr\BinOpType(Expr\BinOpType::SHIFT_LEFT);
+        } elseif ($node instanceof \PhpParser\Node\Expr\BinaryOp\ShiftRight) {
+            $type = new Expr\BinOpType(Expr\BinOpType::SHIFT_RIGHT);
+        } else {
+            goto tryLogicalOp;
+        }
+        return new Expr\BinOp($loc, $left, $type, $right);
+
+        tryLogicalOp:
+        if ($node instanceof \PhpParser\Node\Expr\BinaryOp\BooleanAnd) {
+            $type = new Expr\LogicalOpType(Expr\LogicalOpType::BOOl_AND);
+        } elseif ($node instanceof \PhpParser\Node\Expr\BinaryOp\BooleanOr) {
+            $type = new Expr\LogicalOpType(Expr\LogicalOpType::BOOl_OR);
+        } elseif ($node instanceof \PhpParser\Node\Expr\BinaryOp\LogicalAnd) {
+            $type = new Expr\LogicalOpType(Expr\LogicalOpType::LOGIC_AND);
+        } elseif ($node instanceof \PhpParser\Node\Expr\BinaryOp\LogicalOr) {
+            $type = new Expr\LogicalOpType(Expr\LogicalOpType::LOGIC_OR);
+        } elseif ($node instanceof \PhpParser\Node\Expr\BinaryOp\LogicalXor) {
+            $type = new Expr\LogicalOpType(Expr\LogicalOpType::LOGIC_XOR);
+        } else {
+            goto tryComparisonOp;
+        }
+        return new Expr\LogicalOp($loc, $left, $type, $right);
+
+        tryComparisonOp:
+        if ($node instanceof \PhpParser\Node\Expr\BinaryOp\Equal) {
+            $type = new Expr\ComparisonOpType(Expr\ComparisonOpType::EQUAL);
+        } elseif ($node instanceof \PhpParser\Node\Expr\BinaryOp\Greater) {
+            $type = new Expr\ComparisonOpType(Expr\ComparisonOpType::GREATER);
+        } elseif ($node instanceof \PhpParser\Node\Expr\BinaryOp\GreaterOrEqual) {
+            $type = new Expr\ComparisonOpType(Expr\ComparisonOpType::GREATER_OR_EQUAL);
+        } elseif ($node instanceof \PhpParser\Node\Expr\BinaryOp\Identical) {
+            $type = new Expr\ComparisonOpType(Expr\ComparisonOpType::IDENTICAL);
+        } elseif ($node instanceof \PhpParser\Node\Expr\BinaryOp\NotEqual) {
+            $type = new Expr\ComparisonOpType(Expr\ComparisonOpType::NOT_EQUAL);
+        } elseif ($node instanceof \PhpParser\Node\Expr\BinaryOp\NotIdentical) {
+            $type = new Expr\ComparisonOpType(Expr\ComparisonOpType::NOT_IDENTICAL);
+        } elseif ($node instanceof \PhpParser\Node\Expr\BinaryOp\Smaller) {
+            $type = new Expr\ComparisonOpType(Expr\ComparisonOpType::LESS);
+        } elseif ($node instanceof \PhpParser\Node\Expr\BinaryOp\SmallerOrEqual) {
+            $type = new Expr\ComparisonOpType(Expr\ComparisonOpType::LESS_OR_EQUAL);
         } else {
             throw new \Exception('Unhandled binary operator: ' . get_class($node));
         }
-
-        $left  = $this->parseExpr($node->left);
-        $right = $this->parseExpr($node->right);
-        return new Expr\BinOp($loc, $left, $type, $right);
+        return new Expr\Comparison($loc, $left, $right, $type);
     }
 
     private function getMagicConstValue(Constants\MagicConst $type, int $line):string {
