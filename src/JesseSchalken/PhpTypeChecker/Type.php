@@ -159,6 +159,10 @@ abstract class Type extends PhpTypeChecker\Node {
         return self::union($this, $types);
     }
 
+    public final function checkAgainst(HasCodeLoc $loc, self $that, Context\Context $context) {
+        $that->checkContains($loc, $this, $context);
+    }
+
     public final function checkContains(HasCodeLoc $loc, self $that, Context\Context $context) {
         if (!$this->containsType($that, $context)) {
             $context->addError("$that is incompatible with $this", $loc);
@@ -886,21 +890,11 @@ class SingleValue extends SingleType {
     }
 
     public function isCallableMethodOf(Type $type, Context\Context $ctx):bool {
-        $val = $this->value;
-        if (is_string($val)) {
-            return $type->hasCallableMethod($val, $ctx);
-        } else {
-            return false;
-        }
+        return $type->hasCallableMethod((string)$this->value, $ctx);
     }
 
     public function hasCallableMethod(string $method, Context\Context $ctx):bool {
-        $val = $this->value;
-        if (is_string($val)) {
-            return $ctx->methodExists($val, $method, true);
-        } else {
-            return false;
-        }
+        return $ctx->methodExists((string)$this->value, $method, true);
     }
 
     public function useAsArrayKey(HasCodeLoc $loc, Type $array, Context\Context $context, bool $noErrors):Type {
@@ -1213,7 +1207,11 @@ class Shape extends SingleType {
     }
 
     public function getKnownArrayKey(string $key, HasCodeLoc $loc, Context\Context $context, bool $noErrors):Type {
-        return $this->keys[$key] ?? $context->addError("Undefined key '$key'", $loc);
+        $res = $this->keys[$key] ?? Type::none($loc);
+        if (!$noErrors && $res->isEmpty()) {
+            $context->addError("Array key '$key' is not defined on $this", $loc);
+        }
+        return $res;
     }
 
     public function getUnknownArrayKey(HasCodeLoc $loc, Context\Context $context, bool $noErrors):Type {

@@ -659,7 +659,16 @@ class BinOp extends Expr {
 
             case self::ASSIGN:
             case self::ASSIGN_REF:
-                return $this->right->checkExpr($context, $noErrors);
+                $right = $this->right->checkExpr($context, $noErrors);
+                if (!$noErrors) {
+                    $left  = $this->left->checkExpr($context, $noErrors);
+                    if ($this->type === self::ASSIGN_REF) {
+                        $left->checkEquivelant($this, $right, $context);
+                    } else {
+                        $left->checkContains($this, $right, $context);
+                    }
+                }
+                return $right;
 
             case self::ASSIGN_ADD:
             case self::ASSIGN_SUBTRACT:
@@ -667,7 +676,15 @@ class BinOp extends Expr {
             case self::ASSIGN_DIVIDE:
             case self::ASSIGN_MODULUS:
             case self::ASSIGN_EXPONENT:
-                return Type\Type::number($this);
+                $number = Type\Type::number($this);
+                if (!$noErrors) {
+                    $left  = $this->left->checkExpr($context, $noErrors);
+                    $right = $this->right->checkExpr($context, $noErrors);
+                    $right->checkAgainst($this, $number, $context); // read RHS
+                    $left->checkContains($this, $number, $context); // write LHS
+                    $left->checkAgainst($this, $number, $context); // read LHS
+                }
+                return $number;
 
             case self::ASSIGN_CONCAT:
                 return new Type\String_($this);
@@ -677,6 +694,10 @@ class BinOp extends Expr {
             case self::ASSIGN_BIT_XOR:
             case self::ASSIGN_SHIFT_LEFT:
             case self::ASSIGN_SHIFT_RIGHT:
+                if (!$noErrors) {
+                    $this->left->checkExpr($context, $noErrors)->checkAgainst($this, new Type\Int_($this), $context);
+                    $this->right->checkExpr($context, $noErrors)->checkAgainst($this, new Type\Int_($this), $context);
+                }
                 return new Type\Int_($this);
 
             default:

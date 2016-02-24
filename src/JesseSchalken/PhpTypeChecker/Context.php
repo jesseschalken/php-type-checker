@@ -137,7 +137,7 @@ class Context {
      * @param bool                 $noErrors
      * @return Type\Type
      */
-    public function callFunction(HasCodeLoc $loc, string $name, array $args, bool $noErrors) {
+    public function callFunction(HasCodeLoc $loc, string $name, array $args, bool $noErrors):Type\Type {
         $function = $this->getFunction($name);
         if ($function) {
             return $function->call($loc, $this, $args, $noErrors);
